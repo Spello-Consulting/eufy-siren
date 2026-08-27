@@ -1,0 +1,30 @@
+[project]
+name = "eufy-siren"
+version = "0.1.0"
+description = "Eufy Security Siren Integration"
+requires-python = ">=3.13"
+service_name="eufy-siren"
+launch_path="src/main.py"
+dependencies = [
+    "python-dotenv>=1.2.2",
+    "sc-foundation-services>=3.3.0",
+]
+
+[project.optional-dependencies]
+all = [
+    "pre-commit>=4.6.1",
+    "pytest>=9.1.1",
+    "pytest-dotenv>=0.5.2",
+    "pytest-mock>=3.15.1",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

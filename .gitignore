@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+**/.DS_Store
+.python-version
+.ruff_cache/
+.venv/
+*.egg
+*.egg-info
+*.py[oc]
+*.tar.bz2
+*.tar.gz
+*.whl
+*.zip
+build/
+dist/
+venv/
+wheels/
+.env
+.cache_ggshield
+
+# App 
+logs/
+.env.target
+tests/.env.test

@@ -1,0 +1,22 @@
+# Development configuration file for the Eufy Security Siren Integration application.
+
+General:
+  AppName: eufy-siren
+  CheckInterval: 4
+
+Files:
+  LogfileName: logs/logfile.log
+  LogfileMaxLines: 10000
+  LogProcessID: False
+  LogfileVerbosity: debug
+  ConsoleVerbosity: debug
+
+Email:
+  EnableEmail: True
+  SubjectPrefix: "[Dev eufy-siren]: "
+
+
+HeartbeatMonitor:
+  Enable: True
+  WebsiteURL: https://uptime.betterstack.com/api/v1/heartbeat/zcsNtnEQHRDNWJENvcZc94fx
+  HeartbeatTimeout: 5

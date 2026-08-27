@@ -1,0 +1,1 @@
+"""eufy-siren pytest initializer."""

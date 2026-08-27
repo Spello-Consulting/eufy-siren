@@ -1,0 +1,21 @@
+# Production configuration file for the Eufy Security Siren Integration application.
+
+General:
+  AppName: eufy-siren
+  CheckInterval: 30
+
+Files:
+  LogfileName: logs/logfile.log
+  LogfileMaxLines: 10000
+  LogProcessID: False
+  LogfileVerbosity: detailed
+  ConsoleVerbosity: detailed
+
+Email:
+  EnableEmail: True
+  SubjectPrefix: "[eufy-siren]: "
+
+HeartbeatMonitor:
+  Enable: False
+  WebsiteURL: 
+  HeartbeatTimeout: 5
