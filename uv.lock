@@ -316,6 +316,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "python-dotenv" },
     { name = "sc-foundation-services" },
+    { name = "sc-smart-device" },
 ]
 
 [package.optional-dependencies]
@@ -334,6 +335,7 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'all'", specifier = ">=3.15.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "sc-foundation-services", specifier = ">=3.3.0" },
+    { name = "sc-smart-device", specifier = ">=3.3.0" },
 ]
 provides-extras = ["all"]
 
@@ -875,6 +877,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4d/fd/6a0247c42de4a351597e608215e2bfea86c481a9d503308f527578e3eaec/sc_foundation_services-3.3.0.tar.gz", hash = "sha256:469481dff71fc633927178b6f6f1b8618406af0ff656948631caa7211cc98db9", size = 47224, upload-time = "2026-08-05T07:42:07.087Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/48/35/06dfe23d85393ecb2424c32700251b9b3f477719105ac95804a4a2966cf1/sc_foundation_services-3.3.0-py3-none-any.whl", hash = "sha256:ec18c05492e1e3672c6a7c43c9d6959ffb4b8a92f00a417641803c07bda3e60c", size = 38449, upload-time = "2026-08-05T07:42:05.775Z" },
+]
+
+[[package]]
+name = "sc-smart-device"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "sc-foundation-services" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b3/48/764150d4a88d12ae51df334791a81c30337912641fd1bd0b29006645cebd/sc_smart_device-3.3.0.tar.gz", hash = "sha256:5572501bb5717fc6ad904fdca25ca0fe92c8ff9d50933f459e867ba35e4b9760", size = 46767, upload-time = "2026-08-05T16:38:31.473Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/a1/04c948ade933d843e66a95f454c73b89d028025a34df7a59d5271e954fcc/sc_smart_device-3.3.0-py3-none-any.whl", hash = "sha256:9121ca0fd0bf511409129aa059c7877a20afba61c1831317818e1ac041ce1356", size = 45469, upload-time = "2026-08-05T16:38:30.118Z" },
 ]
 
 [[package]]

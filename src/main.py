@@ -3,6 +3,7 @@
 import argparse
 import os
 import platform
+import signal
 import sys
 from pathlib import Path
 from threading import Event
@@ -159,27 +160,16 @@ def main():
 
     cmd_args = parse_command_line_args()
 
+    # Install SIGINT handler early
+    def handle_sigint(_sig, _frame):
+        stop_event.set()
+        wake_event.set()
+    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGTERM, handle_sigint)
+
     config, logger = initialize_config_and_logging(cmd_args)
 
     # Start main loop here
-    try:
-        check_interval = config.get("General", "CheckInterval", default=4) or 4
-        assert isinstance(check_interval, int)
-        i = 0
-        while not stop_event.is_set() and i < check_interval:
-            logger.log_message(f"Main loop iteration {i + 1}.", "debug")
-            logger.ping_heartbeat()
-            stop_event.wait(timeout=1.0)    # Sleep for 1 second or until stop_event is set
-            i += 1
-    except KeyboardInterrupt:
-        logger.log_message("KeyboardInterrupt received. Shutting down...", "summary")
-        stop_event.set()
-        wake_event.set()
-    except (RuntimeError, TypeError) as e:
-        logger.log_fatal_error(f"Fatal error detected: {e}")
-        sys.exit(1)
-    finally:
-        logger.log_message("eufy-siren application stopped.", "summary")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ launch_path="src/main.py"
 dependencies = [
     "python-dotenv>=1.2.2",
     "sc-foundation-services>=3.3.0",
+    "sc-smart-device>=3.3.0",
 ]
 
 [project.optional-dependencies]

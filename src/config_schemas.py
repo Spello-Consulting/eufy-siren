@@ -13,7 +13,30 @@ class ConfigSchema:
                 "nullable": True,
                 "schema": {
                     "AppName": {"type": "string", "required": False, "nullable": True},
-                    "CheckInterval": {"type": "number", "required": False, "nullable": True},
+                    "PollingInterval": {"type": "number", "required": False, "nullable": True, "min": 1, "max": 3600},
+                },
+            },
+            "ServiceAPI": {
+                "type": "dict",
+                "required": False,
+                "schema": {
+                    "Enable": {"type": "boolean", "required": False, "nullable": True},
+                    "HostingIP": {"type": "string", "required": True, "nullable": True},
+                    "Port": {"type": "number", "required": True, "nullable": True, "min": 80, "max": 65535},
+                },
+            },
+            "Siren": {
+                "type": "dict",
+                "required": False,
+                "schema": {
+                    "Enable": {"type": "boolean", "required": False, "nullable": True},
+                    "Switch": {"type": "string", "required": True, "nullable": True},
+                    "SirenDuration": {"type": "number", "required": True, "nullable": True, "min": 1, "max": 600},
+                    "MinMotionEvents": {"type": "number", "required": True, "nullable": True, "min": 1, "max": 10},
+                    "MinMotionSources": {"type": "number", "required": True, "nullable": True, "min": 1, "max": 10},
+                    "MinMotionInterval": {"type": "number", "required": True, "nullable": True, "min": 1, "max": 360},
+                    "MaxMotionInterval": {"type": "number", "required": True, "nullable": True, "min": 1, "max": 3600},
+                    "PostTriggerSleepTimer": {"type": "number", "required": True, "nullable": True, "min": 30, "max": 86400},
                 },
             },
         }
