@@ -55,7 +55,7 @@ ServiceAPI:
 Siren:
   Enable: True
   Switch: "Spello Siren O1"
-  SirenDuration: 30           # How long to sound the siren in seconds
+  SirenDuration: 30           # How long to sound the siren in seconds after the last triigering event
   MinMotionEvents: 2          # Minimum number of motion events required to trigger the siren
   MinMotionSources: 2         # Minimum number of unique motion sources required to trigger the siren
   MinMotionInterval: 10       # Minimum interval between motion events in seconds
@@ -66,3 +66,5 @@ HeartbeatMonitor:
   Enable: True
   WebsiteURL: https://uptime.betterstack.com/api/v1/heartbeat/g93Vsb4YEqiScCuzUtMzXzhP
   HeartbeatTimeout: 5
+  # How often to post the state to the heartbeat monitor (in seconds)
+  Frequency: 20

@@ -23,7 +23,7 @@ class ConfigSchema:
                     "Enable": {"type": "boolean", "required": False, "nullable": True},
                     "HostingIP": {"type": "string", "required": True, "nullable": True},
                     "Port": {"type": "number", "required": True, "nullable": True, "min": 80, "max": 65535},
-                    "Enpoints": {
+                    "Endpoints": {
                         "type": "list",
                         "required": True,
                         "nullable": False,

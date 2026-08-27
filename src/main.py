@@ -9,11 +9,13 @@ from pathlib import Path
 from threading import Event
 
 from dotenv import load_dotenv
+from mergedeep import merge
 from sc_foundation import (
     SCCommon,
     SCConfigManager,
     SCLogger,
 )
+from sc_smart_device import SCSmartDevice, SmartDeviceWorker, smart_devices_validator
 
 from config_schemas import ConfigSchema
 
@@ -109,14 +111,17 @@ def initialize_config_and_logging(cmd_args) -> tuple[SCConfigManager, SCLogger]:
         tuple[SCConfigManager, SCLogger]: Initialized configuration manager and logger instances.
     """
     schemas = ConfigSchema()
-    assert isinstance(schemas.validation, dict)
+
+    # Merge the SmartDevices validation schema with the default validation schema
+    merged_schema = merge(schemas.validation, smart_devices_validator)
+    assert isinstance(merged_schema, dict), "Merged schema should be type dict"
 
     try:
         config_file = cmd_args["config_file"]
         assert isinstance(config_file, str)
         config = SCConfigManager(
             config_file=config_file,
-            validation_schema=schemas.validation
+            validation_schema=merged_schema
         )
     except RuntimeError as e:
         print(f"Configuration error: {e}", file=sys.stderr)

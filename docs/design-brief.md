@@ -23,22 +23,33 @@ The control flow is as follows:
     2. SmartDeviceWorker thread to control the smart switch
     3. API thread responding to GET requests posted by Apple Home. 
 - Use the [ThreadManager class](https://spello-consulting.github.io/sc-foundation/reference/thread_manager/) from the sc-foundation-services library to manage and orchestrate threads.
+- Use sc_smart_device.SmartDeviceView class to return smart switch data back to the controller thread in a thread-safe manner.
+- Thread hand-off: the ServiceAPI thread will need to push motion events to the controller's state via a locked list thread-safe structure plus the existing `wake_event`. This can follow the same pattern the SmartDeviceView class.
 - For an example project that also uses the sc-smart-device library and the ThreadManager class, see ~/dev/PowerController
 - A YAMl configuration file has been created that should contain most of the settings required for this app: `configs/development.yaml` 
+- Note that the validation schema for the Files, Email and HeartbeatMonitor sections of the config file are provided automatically by SCLogger. The validation scheme for SCSmartDevices is merged into the main schema using sc_smart_device.smart_devices_validator.
 - Create a full pytest suite. Testing can set SCSmartDevices.Devices\[\].Simulate = True to simulate a smart switch.
 
 ## Functional Requirements
 
 - The app will accept any configured API endpoint
 - App API requests (valid or not) are logged
-- Starting the siren means turning on the Smart Device switch as specified in the Siren.Switch configuration parameter. This must reference a valid smart switch output under SCSmartDevices.Devices\[\].Outputs\[\]
+- Starting the siren means turning on the Smart Device switch as specified in the Siren.Switch configuration parameter. This must reference a valid smart switch output under SCSmartDevices.Devices\[\].Outputs\[\]. This will be validated at runtime rather than via the Cerberus validator.
 - The endpoint action of StartSiren will start the siren immediately regardless of whether any motion conditions have been met.
-- The endpoint action of StopSiren will start the siren immediately and the post trigger sleep interval will begin.
+- The endpoint action of StopSiren will stop the siren immediately and the post trigger sleep interval will begin.
 - Nominally, the siren will be started when one or more motion events (Service API endpoints of action Motion) are received.
 - If the configuration calls for more than one motion event (Siren.MinMotionEvents) before the siren is started, then all the events must be separated by at least Siren.MinMotionInterval seconds and no more than Siren.MaxMotionInterval seconds).
-- If Siren.MinMotionSources is greater than one, this means that motion events must be received by more than one Motion end point within this Siren.MinMotionInterval /  Siren.MaxMotionInterval window. For example, if Siren.MinMotionSources = 2, then we must receive motion events from at least 2 unique endpoints.
+- If Siren.MinMotionSources is greater than one, this means that motion events must be received by more than one Motion end point within this Siren.MinMotionInterval /  Siren.MaxMotionInterval window. 
+    - For example, if Siren.MinMotionSources = 2, then we must receive motion events from at least 2 unique endpoints. 
+    - Siren.MinMotionInterval is a per-source debounce - each camera can only contribute one event per interval, rather than a global gap between any two events.
+    - An event counts if it falls within MaxMotionInterval of the previous qualifying event (a sliding window that resets if the gap is exceeded).
+- The siren is motion-following - it will be turned off Siren.SirenDuration seconds after the last triggering condition has been received, or if a StopSiren endpoint action is called. If matching motion events continue to be received, while the siren is sounding, the Siren.SirenDuration count down time will be reset. 
+- The Siren.PostTriggerSleepTimer is a cooldown hard lock out where motion is ignored entirely for the specified time after the siren is stopped. If a StartSiren end point is invoked during this period, the siren will start and this post trigger sleep period will be cleared. 
+- The URL endpoints are unauthenticated by default. However, optionally a `ACCESS_KEY` environment variable can be set, in which case the client (Apple Home) must pass this key in the URL (e.g. http://192.168.86.99:8085/motion/camera1?key=my-access-key) or in the header.
+- The heartbeat configuration is setup as part of the SCLogger initialisation. The main controller thread should call logger.ping_heartbeat() every tick and the SCLogger will take care of pinging the heartbeat URL when it's time to do so.
+- There is no requirement for a web UI for this project.
 - Create the [readme.md](https://readme.md "https://readme.md") file with context, installation and configuration instructions including guidelines for setting up: 
     - The Eufy Security > Apple Home integration
     - Setting up the appropriate Apple Home integration for each camera to drive the ServiceAPI calls.
-- There is no requirement for a web UI for this project.
+
   
