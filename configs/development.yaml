@@ -34,33 +34,33 @@ ServiceAPI:
   Port: 8085
   Endpoints:
     - Name: "Camera 1"
-      URL: "/motion/camera1"
+      Path: "/motion/camera1"
       Action: "Motion"
     - Name: "Camera 2"
-      URL: "/motion/camera2"
+      Path: "/motion/camera2"
       Action: "Motion"
     - Name: "Camera 3"
-      URL: "/motion/camera3"
+      Path: "/motion/camera3"
       Action: "Motion"
     - Name: "Camera 4"
-      URL: "/motion/camera4"
+      Path: "/motion/camera4"
       Action: "Ignore"
     - Name: "Start Siren"
-      URL: "/siren/start"
+      Path: "/siren/start"
       Action: "StartSiren"
     - Name: "Stop Siren"
-      URL: "/siren/stop"
+      Path: "/siren/stop"
       Action: "StopSiren"
 
 Siren:
   Enable: True
   Switch: "Spello Siren O1"
-  SirenDuration: 30
-  MinMotionEvents: 2
-  MinMotionSources: 2
-  MinMotionInterval: 10
-  MaxMotionInterval: 60
-  PostTriggerSleepTimer: 60
+  SirenDuration: 30           # How long to sound the siren in seconds
+  MinMotionEvents: 2          # Minimum number of motion events required to trigger the siren
+  MinMotionSources: 2         # Minimum number of unique motion sources required to trigger the siren
+  MinMotionInterval: 10       # Minimum interval between motion events in seconds
+  MaxMotionInterval: 60       # Maximum interval between motion events in seconds
+  PostTriggerSleepTimer: 60   # Time to wait after triggering the siren before it can be triggered again
 
 HeartbeatMonitor:
   Enable: True

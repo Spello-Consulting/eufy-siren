@@ -23,6 +23,19 @@ class ConfigSchema:
                     "Enable": {"type": "boolean", "required": False, "nullable": True},
                     "HostingIP": {"type": "string", "required": True, "nullable": True},
                     "Port": {"type": "number", "required": True, "nullable": True, "min": 80, "max": 65535},
+                    "Enpoints": {
+                        "type": "list",
+                        "required": True,
+                        "nullable": False,
+                        "schema": {
+                            "type": "dict",
+                            "schema": {
+                                "Name": {"type": "string", "required": True, "nullable": False},
+                                "Path": {"type": "string", "required": True, "nullable": False},
+                                "Action": {"type": "string", "required": True, "nullable": False, "allowed": ["Motion", "StartSiren", "StopSiren", "Ignore"]},
+                            },
+                        },
+                    },
                 },
             },
             "Siren": {
