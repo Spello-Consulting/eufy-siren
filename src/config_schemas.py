@@ -16,6 +16,19 @@ class ConfigSchema:
                     "PollingInterval": {"type": "number", "required": False, "nullable": True, "min": 1, "max": 3600},
                 },
             },
+            "SMS": {
+                "type": "dict",
+                "required": False,
+                "schema": {
+                    "EnableSMS": {"type": "boolean", "required": False, "nullable": True},
+                    "SendSMSTo": {
+                        "type": "list",
+                        "required": False,
+                        "nullable": True,
+                        "schema": {"type": "string"},
+                    },
+                },
+            },
             "ServiceAPI": {
                 "type": "dict",
                 "required": False,
@@ -32,7 +45,7 @@ class ConfigSchema:
                             "schema": {
                                 "Name": {"type": "string", "required": True, "nullable": False},
                                 "Path": {"type": "string", "required": True, "nullable": False},
-                                "Action": {"type": "string", "required": True, "nullable": False, "allowed": ["Motion", "StartSiren", "StopSiren", "Ignore"]},
+                                "Action": {"type": "string", "required": True, "nullable": False, "allowed": ["Motion", "StartSiren", "StopSiren", "ResetSiren", "Ignore"]},
                             },
                         },
                     },

@@ -151,6 +151,7 @@ class SirenController:
 
             self._evaluate_timers(now)
             self.logger.ping_heartbeat()
+            self.logger.trim_logfile()
 
             self.wake_event.wait(timeout=self.poll_interval)
 
@@ -180,6 +181,11 @@ class SirenController:
                 f"StopSiren requested via '{event.endpoint_name}'.", "summary"
             )
             self._stop_siren(now, reason="StopSiren endpoint")
+        elif event.action == EndpointAction.RESET_SIREN:
+            self.logger.log_message(
+                f"ResetSiren requested via '{event.endpoint_name}'.", "summary"
+            )
+            self._reset_siren(reason="ResetSiren endpoint")
         elif event.action == EndpointAction.MOTION:
             self._handle_motion(event, now)
         else:  # EndpointAction.IGNORE
@@ -257,6 +263,17 @@ class SirenController:
         self.logger.log_message(
             f"Siren STOPPED ({reason}); cooldown for {self.post_trigger_sleep:g}s.", "summary"
         )
+
+    def _reset_siren(self, reason: str) -> None:
+        """Clear the Siren cooldown state if it is active or idle, returning to IDLE."""
+        if self.state == SirenState.SOUNDING:
+            self._command_switch(on=False)
+            self.logger.log_message(f"Siren stopped ({reason}).", "summary")
+        if self.state in {SirenState.COOLDOWN, SirenState.SOUNDING}:
+            self.state = SirenState.IDLE
+            self._cooldown_until = None
+            self.tracker.reset()
+            self.logger.log_message(f"Siren reset ({reason}) — cooldown cleared.", "summary")
 
     def _evaluate_timers(self, now: float) -> None:
         """Advance time-based state transitions (duration expiry, cooldown end).

@@ -27,7 +27,7 @@ The control flow is as follows:
 - Thread hand-off: the ServiceAPI thread will need to push motion events to the controller's state via a locked list thread-safe structure plus the existing `wake_event`. This can follow the same pattern the SmartDeviceView class.
 - For an example project that also uses the sc-smart-device library and the ThreadManager class, see ~/dev/PowerController
 - A YAMl configuration file has been created that should contain most of the settings required for this app: `configs/development.yaml` 
-- Note that the validation schema for the Files, Email and HeartbeatMonitor sections of the config file are provided automatically by SCLogger. The validation scheme for SCSmartDevices is merged into the main schema using sc_smart_device.smart_devices_validator.
+- Note that the validation schema for the Files, Email and HeartbeatMonitor sections of the config file are provided automatically by SCConfigManager. The validation scheme for SCSmartDevices is merged into the main schema using sc_smart_device.smart_devices_validator.
 - Create a full pytest suite. Testing can set SCSmartDevices.Devices\[\].Simulate = True to simulate a smart switch.
 
 ## Functional Requirements

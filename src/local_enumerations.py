@@ -19,6 +19,7 @@ class EndpointAction(StrEnum):
     MOTION = "Motion"
     START_SIREN = "StartSiren"
     STOP_SIREN = "StopSiren"
+    RESET_SIREN = "ResetSiren"
     IGNORE = "Ignore"
 
 

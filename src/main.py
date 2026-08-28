@@ -16,7 +16,6 @@ from sc_foundation import (
     SCConfigManager,
     SCLogger,
     ThreadManager,
-    yaml_config_validation,
 )
 from sc_smart_device import SCSmartDevice, SmartDeviceWorker, smart_devices_validator
 
@@ -122,7 +121,7 @@ def initialize_config_and_logging(
     # Merge the local schema (General/ServiceAPI/Siren) with the foundation schema
     # (Files/Email/HeartbeatMonitor) and the smart-device schema (SCSmartDevices) so the
     # whole config file validates in one pass. Merge into a fresh dict so no source is mutated.
-    merged_schema = merge({}, schemas.validation, yaml_config_validation, smart_devices_validator)
+    merged_schema = merge({}, schemas.validation, smart_devices_validator)
     assert isinstance(merged_schema, dict), "Merged schema should be type dict"
 
     try:

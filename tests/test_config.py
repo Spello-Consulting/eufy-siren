@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from mergedeep import merge
-from sc_foundation import SCConfigManager, yaml_config_validation
+from sc_foundation import SCConfigManager
 from sc_smart_device import smart_devices_validator
 
 from config_schemas import ConfigSchema
@@ -54,8 +54,12 @@ Siren:
 
 
 def _merged_schema() -> dict:
-    """Build the same merged validation schema main.py uses."""
-    schema = merge({}, ConfigSchema().validation, yaml_config_validation, smart_devices_validator)
+    """Build the same merged validation schema main.py uses.
+
+    Note: the Files/Email/HeartbeatMonitor schema is merged in automatically by
+    SCConfigManager, so it is intentionally not included here.
+    """
+    schema = merge({}, ConfigSchema().validation, smart_devices_validator)
     assert isinstance(schema, dict)
     return schema
 

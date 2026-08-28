@@ -133,6 +133,7 @@ fatal error. The `Files`, `Email` and `HeartbeatMonitor` sections are handled by
 | `Motion` | A motion event; counts toward the trigger conditions. |
 | `StartSiren` | Sound the siren immediately, ignoring motion conditions (and clearing any cooldown). |
 | `StopSiren` | Stop the siren immediately and begin the cooldown. |
+| `ResetSiren` | Stop the siren (if on) and return to the idle condition. |
 | `Ignore` | Logged but never counted (useful to wire up a camera without arming it). |
 
 Every request — recognised or not — is logged. Unknown paths return `404`.
