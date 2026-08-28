@@ -4,7 +4,7 @@
 class ConfigSchema:
     """Base class for configuration schemas."""
 
-    def __init__(self):
+    def __init__(self) -> None:
 
         self.validation = {
             "General": {
