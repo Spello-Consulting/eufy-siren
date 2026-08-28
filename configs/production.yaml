@@ -8,8 +8,8 @@ Files:
   LogfileName: logs/logfile.log
   LogfileMaxLines: 10000
   LogProcessID: False
-  LogfileVerbosity: details
-  ConsoleVerbosity: details
+  LogfileVerbosity: detailed
+  ConsoleVerbosity: detailed
 
 Email:
   EnableEmail: True
