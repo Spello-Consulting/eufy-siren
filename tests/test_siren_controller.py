@@ -35,11 +35,13 @@ class FakeConfig:
 
 
 class FakeLogger:
-    """Captures log and fatal-error calls."""
+    """Captures log, fatal-error, and alert (email/SMS) calls."""
 
     def __init__(self) -> None:
         self.messages: list[tuple[str, str]] = []
         self.fatal_errors: list[str] = []
+        self.emails: list[tuple[str, str]] = []
+        self.sms: list[tuple[str, list[str] | None]] = []
 
     def log_message(self, message: str, verbosity: str = "summary") -> None:
         self.messages.append((verbosity, message))
@@ -48,6 +50,14 @@ class FakeLogger:
         self.fatal_errors.append(message)
 
     def ping_heartbeat(self, is_fail: bool | None = None) -> bool:  # noqa: ARG002, PLR6301
+        return True
+
+    def send_email(self, subject: str, body: str, test_mode: bool = False) -> bool:  # noqa: ARG002
+        self.emails.append((subject, body))
+        return True
+
+    def send_sms(self, body: str, to_numbers: list[str] | None = None) -> bool:
+        self.sms.append((body, to_numbers))
         return True
 
 
@@ -99,17 +109,24 @@ class Clock:
         self.t += seconds
 
 
+SMS_RECIPIENTS = ["+15550001111"]
+
+
 def make_controller(
     *,
     enable: bool = True,
     switch: str = SWITCH,
     min_events: int = 2,
     min_sources: int = 2,
+    email: bool = False,
+    sms: bool = False,
 ) -> tuple[SirenController, FakeWorker, FakeLogger, Clock]:
     """Build a controller wired to test doubles."""
     config = FakeConfig(
         {
             "General": {"PollingInterval": 10},
+            "Email": {"EnableEmail": email},
+            "SMS": {"EnableSMS": sms, "SendSMSTo": SMS_RECIPIENTS},
             "Siren": {
                 "Enable": enable,
                 "Switch": switch,
@@ -313,3 +330,131 @@ def test_ignore_action_has_no_effect(action: EndpointAction) -> None:
     controller._handle_event(event, clock())  # noqa: SLF001
     assert controller.state == SirenState.IDLE
     assert worker.last_switch_state() is None
+
+
+# ── ResetSiren ───────────────────────────────────────────────────────────────
+
+
+def reset_event() -> ServiceEvent:
+    """Build a ResetSiren command event."""
+    return ServiceEvent(action=EndpointAction.RESET_SIREN, endpoint_name="Reset", path="/siren/reset")
+
+
+def test_reset_siren_from_sounding_stops_and_returns_to_idle() -> None:
+    """ResetSiren while sounding stops the siren and returns straight to IDLE."""
+    controller, worker, _logger, clock = make_controller()
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
+    controller._handle_event(motion("Camera 2"), clock())  # noqa: SLF001
+    assert controller.state == SirenState.SOUNDING
+
+    controller._handle_event(reset_event(), clock())  # noqa: SLF001
+    assert controller.state == SirenState.IDLE
+    assert worker.last_switch_state() is False
+
+
+def test_reset_siren_from_cooldown_returns_to_idle() -> None:
+    """ResetSiren during cooldown clears the lock-out and returns to IDLE."""
+    controller, _worker, _logger, clock = make_controller()
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
+    controller._handle_event(motion("Camera 2"), clock())  # noqa: SLF001
+    clock.advance(30)
+    controller._evaluate_timers(clock())  # noqa: SLF001
+    assert controller.state == SirenState.COOLDOWN
+
+    controller._handle_event(reset_event(), clock())  # noqa: SLF001
+    assert controller.state == SirenState.IDLE
+
+
+def test_reset_siren_when_idle_is_a_noop() -> None:
+    """ResetSiren from IDLE changes nothing and commands no switch action."""
+    controller, worker, _logger, clock = make_controller()
+    controller._handle_event(reset_event(), clock())  # noqa: SLF001
+    assert controller.state == SirenState.IDLE
+    assert worker.last_switch_state() is None
+
+
+def test_reset_siren_re_arms_for_next_trigger() -> None:
+    """After a reset, a fresh set of motion events can trigger the siren again."""
+    controller, worker, _logger, clock = make_controller()
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
+    controller._handle_event(motion("Camera 2"), clock())  # noqa: SLF001
+    controller._handle_event(reset_event(), clock())  # noqa: SLF001
+    assert controller.state == SirenState.IDLE
+
+    clock.advance(1)
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
+    controller._handle_event(motion("Camera 2"), clock())  # noqa: SLF001
+    assert controller.state == SirenState.SOUNDING
+    assert worker.last_switch_state() is True
+
+
+# ── Alert notifications ──────────────────────────────────────────────────────
+
+
+def _trigger(controller: SirenController, clock: Clock) -> None:
+    """Drive two motion events so the siren starts."""
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
+    controller._handle_event(motion("Camera 2"), clock())  # noqa: SLF001
+
+
+def test_alerts_sent_on_start_and_stop() -> None:
+    """With email and SMS enabled, start and stop each send one alert on both channels."""
+    controller, _worker, logger, clock = make_controller(email=True, sms=True)
+    _trigger(controller, clock)
+    assert len(logger.emails) == 1
+    assert len(logger.sms) == 1
+    assert logger.sms[0][1] == SMS_RECIPIENTS  # configured recipients are passed through
+
+    event = ServiceEvent(action=EndpointAction.STOP_SIREN, endpoint_name="Stop", path="/siren/stop")
+    controller._handle_event(event, clock())  # noqa: SLF001
+    assert len(logger.emails) == 2
+    assert len(logger.sms) == 2
+
+
+def test_started_alert_sent_only_once_while_sounding() -> None:
+    """Motion-following and a repeated StartSiren do not resend the started alert."""
+    controller, _worker, logger, clock = make_controller(email=True, sms=True)
+    _trigger(controller, clock)
+    assert len(logger.emails) == 1
+
+    clock.advance(5)
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001  motion-following
+    start = ServiceEvent(action=EndpointAction.START_SIREN, endpoint_name="Start", path="/siren/start")
+    controller._handle_event(start, clock())  # noqa: SLF001  re-invoked while sounding
+    assert len(logger.emails) == 1
+    assert len(logger.sms) == 1
+
+
+def test_no_alerts_when_disabled() -> None:
+    """No alerts are sent when both channels are disabled."""
+    controller, _worker, logger, clock = make_controller(email=False, sms=False)
+    _trigger(controller, clock)
+    assert logger.emails == []
+    assert logger.sms == []
+
+
+def test_email_only_when_sms_disabled() -> None:
+    """Only the email channel fires when SMS is disabled."""
+    controller, _worker, logger, clock = make_controller(email=True, sms=False)
+    _trigger(controller, clock)
+    assert len(logger.emails) == 1
+    assert logger.sms == []
+
+
+def test_reset_from_sounding_sends_stopped_alert() -> None:
+    """A reset that stops a sounding siren also sends the stopped alert."""
+    controller, _worker, logger, clock = make_controller(email=True, sms=False)
+    _trigger(controller, clock)
+    assert len(logger.emails) == 1  # started
+
+    controller._handle_event(reset_event(), clock())  # noqa: SLF001
+    assert len(logger.emails) == 2  # started + stopped
+
+
+def test_stopped_alert_not_sent_without_start() -> None:
+    """StopSiren from IDLE (no active siren) sends no stopped alert."""
+    controller, _worker, logger, clock = make_controller(email=True, sms=True)
+    event = ServiceEvent(action=EndpointAction.STOP_SIREN, endpoint_name="Stop", path="/siren/stop")
+    controller._handle_event(event, clock())  # noqa: SLF001
+    assert logger.emails == []
+    assert logger.sms == []

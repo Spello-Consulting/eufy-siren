@@ -18,7 +18,7 @@ Email:
 # SMS alerts via Twilio. Credentials (SID/token/from-number) come from .env.
 # If those env vars are absent at runtime, SMS is skipped with a warning.
 SMS:
-  EnableSMS: True
+  EnableSMS: False
   SendSMSTo:
 
 

@@ -13,6 +13,10 @@ The state machine is ``IDLE → SOUNDING → COOLDOWN → IDLE``:
 * **COOLDOWN** — a ``PostTriggerSleepTimer`` lock-out during which motion is ignored;
   a ``StartSiren`` request clears it immediately.
 
+When the siren starts and again when it stops, an alert is sent via email (if
+``Email.EnableEmail``) and/or SMS (if ``SMS.EnableSMS``), using ``SCLogger.send_email`` and
+``SCLogger.send_sms``. A flag ensures exactly one started alert per activation.
+
 The clock is injected (``time_fn``) so the timing behaviour can be unit-tested deterministically.
 """
 
@@ -77,6 +81,11 @@ class SirenController:
         )
         self.poll_interval = _as_float(config.get("General", "PollingInterval", default=10), 10.0)
 
+        # Alert notifications on siren start/stop (email and/or SMS).
+        self.email_alerts_enabled = bool(config.get("Email", "EnableEmail", default=False))
+        self.sms_alerts_enabled = bool(config.get("SMS", "EnableSMS", default=False))
+        self._sms_recipients = list(config.get("SMS", "SendSMSTo", default=[]) or [])
+
         self.tracker = MotionTracker(
             min_events=int(_as_float(config.get("Siren", "MinMotionEvents", default=1), 1)),
             min_sources=int(_as_float(config.get("Siren", "MinMotionSources", default=1), 1)),
@@ -89,6 +98,9 @@ class SirenController:
         self._last_trigger_ts: float | None = None
         self._cooldown_until: float | None = None
         self._commanded_on = False
+        # Whether a "siren started" alert is outstanding (awaiting a matching "stopped"
+        # alert). Guards against sending duplicate started alerts while the siren sounds.
+        self._start_alert_sent = False
 
     # ── Startup validation ───────────────────────────────────────────────────
 
@@ -161,6 +173,9 @@ class SirenController:
         """Turn the siren off on shutdown."""
         self.logger.log_message("Siren controller stopping — turning siren off.", "detailed")
         self._command_switch(on=False)
+        # If the siren was sounding, send the matching stopped alert so an activation is
+        # never left un-closed.
+        self._notify_siren_stopped("controller shutdown")
 
     # ── Event handling ───────────────────────────────────────────────────────
 
@@ -185,7 +200,7 @@ class SirenController:
             self.logger.log_message(
                 f"ResetSiren requested via '{event.endpoint_name}'.", "summary"
             )
-            self._reset_siren(reason="ResetSiren endpoint")
+            self._reset_siren(now, reason="ResetSiren endpoint")
         elif event.action == EndpointAction.MOTION:
             self._handle_motion(event, now)
         else:  # EndpointAction.IGNORE
@@ -247,6 +262,7 @@ class SirenController:
             f"Siren STARTED ({reason}); will stop {self.siren_duration:g}s after last motion.",
             "summary",
         )
+        self._notify_siren_started(reason)
 
     def _stop_siren(self, now: float, reason: str) -> None:
         """Stop the siren and enter the COOLDOWN state.
@@ -263,12 +279,12 @@ class SirenController:
         self.logger.log_message(
             f"Siren STOPPED ({reason}); cooldown for {self.post_trigger_sleep:g}s.", "summary"
         )
+        self._notify_siren_stopped(reason)
 
-    def _reset_siren(self, reason: str) -> None:
+    def _reset_siren(self, now: float, reason: str) -> None:
         """Clear the Siren cooldown state if it is active or idle, returning to IDLE."""
         if self.state == SirenState.SOUNDING:
-            self._command_switch(on=False)
-            self.logger.log_message(f"Siren stopped ({reason}).", "summary")
+            self._stop_siren(now, reason)
         if self.state in {SirenState.COOLDOWN, SirenState.SOUNDING}:
             self.state = SirenState.IDLE
             self._cooldown_until = None
@@ -320,6 +336,57 @@ class SirenController:
         )
         self.smart_device_worker.submit(req)
         self._commanded_on = on
+
+    # ── Alert notifications ──────────────────────────────────────────────────
+
+    def _notify_siren_started(self, reason: str) -> None:
+        """Send a "siren started" alert, at most once per activation.
+
+        Args:
+            reason: Human-readable reason the siren started, included in the alert.
+        """
+        if self._start_alert_sent:
+            return
+        self._start_alert_sent = True
+        self._send_alert(
+            subject="eufy-siren: SIREN ACTIVATED",
+            body=f"The eufy-siren has been activated and the siren is now sounding ({reason}).",
+        )
+
+    def _notify_siren_stopped(self, reason: str) -> None:
+        """Send a "siren stopped" alert, only if a start alert is outstanding.
+
+        Args:
+            reason: Human-readable reason the siren stopped, included in the alert.
+        """
+        if not self._start_alert_sent:
+            return
+        self._start_alert_sent = False
+        self._send_alert(
+            subject="eufy-siren: siren stopped",
+            body=f"The eufy-siren has stopped sounding ({reason}).",
+        )
+
+    def _send_alert(self, subject: str, body: str) -> None:
+        """Dispatch an alert via email and/or SMS per configuration.
+
+        A failure on one channel is logged and never propagates — an alerting problem
+        must not take down the controller thread.
+
+        Args:
+            subject: Email subject (SMS uses the body only).
+            body: Message body for both channels.
+        """
+        if self.email_alerts_enabled:
+            try:
+                self.logger.send_email(subject, body)
+            except Exception as exc:  # noqa: BLE001 - a mail failure must not break the controller
+                self.logger.log_message(f"Failed to send email alert: {exc}", "error")
+        if self.sms_alerts_enabled:
+            try:
+                self.logger.send_sms(body, self._sms_recipients or None)
+            except Exception as exc:  # noqa: BLE001 - an SMS failure must not break the controller
+                self.logger.log_message(f"Failed to send SMS alert: {exc}", "error")
 
 
 def _as_float(value: object, default: float) -> float:

@@ -126,6 +126,29 @@ Siren:
 fatal error. The `Files`, `Email` and `HeartbeatMonitor` sections are handled by
 `sc-foundation-services` (logging, email alerts, and an uptime heartbeat ping).
 
+### Alerts
+
+When the siren **starts** and again when it **stops**, an alert is sent via:
+
+- **Email** — if `Email.EnableEmail` is `True` (uses the SMTP settings under `Email`).
+- **SMS** — if `SMS.EnableSMS` is `True` (uses Twilio; recipients from `SMS.SendSMSTo`, or the
+  `TWILIO_SEND_SMS_TO` environment variable).
+
+```yaml
+Email:
+  EnableEmail: True
+SMS:
+  EnableSMS: False
+  SendSMSTo:
+    - "+15550001111"
+```
+
+Exactly one "started" alert is sent per activation (motion-following and repeated
+`StartSiren` requests don't resend it), and a matching "stopped" alert is sent when the
+siren stops — including via `StopSiren`, `ResetSiren`, or the duration elapsing. A failure
+on one channel is logged and never interrupts siren control. SMS credentials come from the
+environment (Twilio); see `SCLogger.send_sms` for the variables.
+
 ### Endpoint actions
 
 | Action | Effect |
