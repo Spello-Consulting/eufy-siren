@@ -75,7 +75,7 @@ Siren:
 
 HeartbeatMonitor:
   Enable: True
-  WebsiteURL: https://uptime.betterstack.com/api/v1/heartbeat/g93Vsb4YEqiScCuzUtMzXzhP
+  WebsiteURL: https://uptime.betterstack.com/api/v1/heartbeat/zcsNtnEQHRDNWJENvcZc94fx
   HeartbeatTimeout: 5
   # How often to post the state to the heartbeat monitor (in seconds)
   Frequency: 20

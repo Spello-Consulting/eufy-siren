@@ -1,21 +1,87 @@
-# Production configuration file for the Eufy Security Siren Integration application.
+# Development configuration file for the Eufy Security Siren Integration application.
 
 General:
   AppName: eufy-siren
-  CheckInterval: 30
+  PollingInterval: 10
 
 Files:
   LogfileName: logs/logfile.log
   LogfileMaxLines: 10000
   LogProcessID: False
-  LogfileVerbosity: detailed
-  ConsoleVerbosity: detailed
+  LogfileVerbosity: details
+  ConsoleVerbosity: details
 
 Email:
   EnableEmail: True
-  SubjectPrefix: "[eufy-siren]: "
+  SubjectPrefix: "[Spello eufy-siren]: "
+
+# SMS alerts via Twilio. Credentials (SID/token/from-number) come from .env.
+# If those env vars are absent at runtime, SMS is skipped with a warning.
+SMS:
+  EnableSMS: True
+  SendSMSTo:
+
+
+SCSmartDevices:
+  AllowDebugLogging: False
+  SimulationFileFolder: simulation_files/
+  Devices:
+    - Name: Spello Siren
+      Model: Shelly2PMG3
+      Hostname: 192.168.86.36
+      Simulate: False
+      ExpectOffline: True
+      Outputs:
+        - Name: "Spello Siren O1"
+        - Name: "Spello Siren O2"
+
+ServiceAPI:
+  Enable: True
+  HostingIP: 0.0.0.0
+  Port: 8085
+  Endpoints:
+    - Name: "Living Room IT"
+      Path: "/motion/livingroom"
+      Action: "Motion"
+    - Name: "Front Door IT"
+      Path: "/motion/frontdoor"
+      Action: "Motion"
+    - Name: "Driveway IT"
+      Path: "/motion/driveway"
+      Action: "Motion"
+    - Name: "Front of House IT"
+      Path: "/motion/fronthouse"
+      Action: "Motion"
+    - Name: "Pool Area IT"
+      Path: "/motion/poolarea"
+      Action: "Ignore"
+    - Name: "Front Gate IT"
+      Path: "/motion/frontgate"
+      Action: "Ignore"
+    - Name: "Start Siren"
+      Path: "/siren/start"
+      Action: "StartSiren"
+    - Name: "Stop Siren"
+      Path: "/siren/stop"
+      Action: "StopSiren"
+    - Name: "Reset Siren"
+      Path: "/siren/reset"
+      Action: "ResetSiren"
+
+
+Siren:
+  Enable: True
+  Switch: "Spello Siren O1"
+  SirenDuration: 90           # How long to sound the siren in seconds after the last triigering event
+  MinMotionEvents: 2          # Minimum number of motion events required to trigger the siren
+  MinMotionSources: 2         # Minimum number of unique motion sources required to trigger the siren
+  MinMotionInterval: 10       # Minimum interval between motion events in seconds
+  MaxMotionInterval: 120       # Maximum interval between motion events in seconds
+  PostTriggerSleepTimer: 120   # Time to wait after triggering the siren before it can be triggered again
 
 HeartbeatMonitor:
-  Enable: False
-  WebsiteURL: 
+  Enable: True
+  WebsiteURL: https://uptime.betterstack.com/api/v1/heartbeat/g93Vsb4YEqiScCuzUtMzXzhP
   HeartbeatTimeout: 5
+  # How often to post the state to the heartbeat monitor (in seconds)
+  Frequency: 60
