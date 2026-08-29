@@ -22,14 +22,13 @@ SMS:
   EnableSMS: True
   SendSMSTo:
 
-
 SCSmartDevices:
   AllowDebugLogging: False
   SimulationFileFolder: simulation_files/
   Devices:
     - Name: Spello Siren
       Model: Shelly2PMG3
-      Hostname: 192.168.86.36
+      Hostname: 192.168.86.179
       Simulate: False
       ExpectOffline: True
       Outputs:
@@ -68,7 +67,6 @@ ServiceAPI:
     - Name: "Reset Siren"
       Path: "/siren/reset"
       Action: "ResetSiren"
-
 
 Siren:
   Enable: True
