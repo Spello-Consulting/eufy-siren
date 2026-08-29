@@ -18,7 +18,7 @@ jobs:
     environment: pi-spello
     steps:
       - name: Pull latest from GitHub
-        run: sudo git -C /home/<User>/scripts/eufy-siren pull
+        run: sudo git -C /home/pi/scripts/eufy-siren pull
 
       - name: Restart service
         run: sudo systemctl restart eufy-siren
