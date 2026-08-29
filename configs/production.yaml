@@ -9,7 +9,7 @@ Files:
   LogfileName: logs/logfile.log
   LogfileMaxLines: 10000
   LogProcessID: False
-  LogfileVerbosity: detailed
+  LogfileVerbosity: debug
   ConsoleVerbosity: detailed
 
 Email:
