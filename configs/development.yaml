@@ -13,7 +13,7 @@ Files:
   ConsoleVerbosity: debug
 
 Email:
-  EnableEmail: True
+  EnableEmail: False
   SubjectPrefix: "[Dev eufy-siren]: "
 
 # SMS alerts via Twilio. Credentials (SID/token/from-number) come from .env.
@@ -75,7 +75,7 @@ Siren:
   PostTriggerSleepTimer: 60   # Time to wait after triggering the siren before it can be triggered again
 
 HeartbeatMonitor:
-  Enable: True
+  Enable: False
   WebsiteURL: https://uptime.betterstack.com/api/v1/heartbeat/zcsNtnEQHRDNWJENvcZc94fx
   HeartbeatTimeout: 5
   # How often to post the state to the heartbeat monitor (in seconds)
