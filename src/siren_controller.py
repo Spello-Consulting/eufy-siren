@@ -1,7 +1,8 @@
 """The master controller: turns ServiceAPI motion events into siren actions.
 
 `SirenController` runs its :meth:`run` method as the ``controller`` thread. Each tick it
-drains the :class:`~event_inbox.ServiceEventInbox`, feeds motion events through a
+reloads the config if the file changed on disk, drains the
+:class:`~event_inbox.ServiceEventInbox`, feeds motion events through a
 :class:`~motion_tracker.MotionTracker`, advances the siren state machine, drives the smart
 switch via the :class:`~sc_smart_device.SmartDeviceWorker`, and pings the heartbeat monitor.
 
@@ -73,7 +74,36 @@ class SirenController:
         self.wake_event = wake_event
         self._time_fn = time_fn
 
+        # Configuration-derived settings, loaded here and again on every hot-reload.
+        self._load_settings()
+
+        # Timestamp of the config file when last read, for change detection (config hot-reload).
+        self.config_last_check = config.get_config_file_last_modified()
+
+        # State machine
+        self.state: SirenState = SirenState.IDLE
+        self._last_trigger_ts: float | None = None
+        self._cooldown_until: float | None = None
+        self._commanded_on = False
+        # Whether a "siren started" alert is outstanding (awaiting a matching "stopped"
+        # alert). Guards against sending duplicate started alerts while the siren sounds.
+        self._start_alert_sent = False
+
+    def _load_settings(self) -> None:
+        """Read all configuration-derived settings into instance attributes.
+
+        Called at construction and again whenever the config file changes on disk (see
+        :meth:`_reload_config_if_changed`), so edits take effect without a restart. Only
+        settings are (re)read here; the state machine, cooldown timers and any outstanding
+        alert are runtime state and are left untouched.
+        """
+        config = self.config
         self.enabled = bool(config.get("Siren", "Enable", default=True))
+        # When true, motion events are logged but ignored — they cannot trigger the siren.
+        # Manual StartSiren/StopSiren/ResetSiren actions remain fully enabled.
+        self.disable_motion_events = bool(
+            config.get("General", "DisableMotionEvents", default=False)
+        )
         self.switch = str(config.get("Siren", "Switch", default="") or "")
         self.siren_duration = _as_float(config.get("Siren", "SirenDuration", default=30), 30.0)
         self.post_trigger_sleep = _as_float(
@@ -93,15 +123,6 @@ class SirenController:
             max_interval=_as_float(config.get("Siren", "MaxMotionInterval", default=60), 60.0),
         )
 
-        # State machine
-        self.state: SirenState = SirenState.IDLE
-        self._last_trigger_ts: float | None = None
-        self._cooldown_until: float | None = None
-        self._commanded_on = False
-        # Whether a "siren started" alert is outstanding (awaiting a matching "stopped"
-        # alert). Guards against sending duplicate started alerts while the siren sounds.
-        self._start_alert_sent = False
-
     # ── Startup validation ───────────────────────────────────────────────────
 
     def validate_runtime(self) -> bool:
@@ -119,8 +140,7 @@ class SirenController:
             )
             return False
 
-        view = self.smart_device_worker.get_latest_status()
-        if not view.validate_output_id(self.switch):
+        if not self._switch_is_valid():
             msg = (
                 f"Siren.Switch '{self.switch}' does not match any output under "
                 "SCSmartDevices.Devices[].Outputs[]."
@@ -130,6 +150,11 @@ class SirenController:
 
         self.logger.log_message(f"Siren switch validated: output '{self.switch}'.", "detailed")
         return True
+
+    def _switch_is_valid(self) -> bool:
+        """Return whether ``self.switch`` names a real output on a configured device."""
+        view = self.smart_device_worker.get_latest_status()
+        return bool(view.validate_output_id(self.switch))
 
     # ── Thread entry point ───────────────────────────────────────────────────
 
@@ -154,9 +179,18 @@ class SirenController:
                 "Siren.Enable is false — running but the siren will not be sounded.", "summary"
             )
 
+        if self.disable_motion_events:
+            self.logger.log_message(
+                "General.DisableMotionEvents is true — motion events will be logged but ignored; "
+                "manual StartSiren/StopSiren/ResetSiren remain active.",
+                "summary",
+            )
+
         while not stop_event.is_set():
             self.wake_event.clear()
             now = self._time_fn()
+
+            self._reload_config_if_changed()
 
             for event in self.inbox.drain():
                 self._handle_event(event, now)
@@ -168,6 +202,33 @@ class SirenController:
             self.wake_event.wait(timeout=self.poll_interval)
 
         self._shutdown()
+
+    # ── Config hot-reload ────────────────────────────────────────────────────
+
+    def _reload_config_if_changed(self) -> None:
+        """Reload settings from disk if the config file has changed since the last check.
+
+        ``SCConfigManager.check_for_config_changes`` reloads (and re-validates) the file
+        in place when its modification time advances; we then re-read our cached settings.
+        A reload never disturbs the running state machine, but if the newly loaded
+        ``Siren.Switch`` no longer names a real output the previous, validated switch is
+        kept so the siren remains controllable.
+        """
+        timestamp = self.config.check_for_config_changes(self.config_last_check)
+        if timestamp is None:
+            return
+        self.config_last_check = timestamp
+        self.logger.log_message("Configuration file changed on disk — reloading settings.", "summary")
+
+        previous_switch = self.switch
+        self._load_settings()
+        if self.switch != previous_switch and not self._switch_is_valid():
+            self.logger.log_message(
+                f"Reloaded Siren.Switch '{self.switch}' is not a valid output; "
+                f"keeping previous switch '{previous_switch}'.",
+                "warning",
+            )
+            self.switch = previous_switch
 
     def _shutdown(self) -> None:
         """Turn the siren off on shutdown."""
@@ -202,6 +263,13 @@ class SirenController:
             )
             self._reset_siren(now, reason="ResetSiren endpoint")
         elif event.action == EndpointAction.MOTION:
+            if self.disable_motion_events:
+                self.logger.log_message(
+                    f"Motion from '{event.endpoint_name}' ignored — "
+                    "General.DisableMotionEvents is true.",
+                    "debug",
+                )
+                return
             self._handle_motion(event, now)
         else:  # EndpointAction.IGNORE
             self.logger.log_message(

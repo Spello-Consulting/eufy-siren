@@ -1,6 +1,6 @@
 [project]
 name = "eufy-siren"
-version = "1.0.0"
+version = "1.0.1"
 description = "Eufy Security Siren Integration"
 requires-python = ">=3.13"
 service_name="eufy-siren"

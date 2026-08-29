@@ -86,6 +86,11 @@ they come from the environment (see [Environment files](#environment-files)).
 Key sections:
 
 ```yaml
+General:
+  AppName: eufy-siren
+  PollingInterval: 10             # controller tick interval (seconds)
+  DisableMotionEvents: False      # True = log motion events but never let them sound the siren
+
 SCSmartDevices:                 # The smart switch(es) — validated by sc-smart-device
   Devices:
     - Name: Spello Siren
@@ -125,6 +130,17 @@ Siren:
 `Siren.Switch` is validated at startup against the configured outputs; a mismatch is a
 fatal error. The `Files`, `Email` and `HeartbeatMonitor` sections are handled by
 `sc-foundation-services` (logging, email alerts, and an uptime heartbeat ping).
+
+Set `General.DisableMotionEvents` to `True` to have the app **log every motion event but
+never let it sound the siren** — useful while you are home and Apple Home is still
+forwarding Eufy motion events. Manual `StartSiren`, `StopSiren` and `ResetSiren` requests
+remain fully active, so you can still arm the siren on demand.
+
+**Config hot-reload:** the controller checks the config file on each tick and reloads it
+automatically when it changes on disk, so edits (for example flipping
+`General.DisableMotionEvents`) take effect **without restarting the app**. The reload never
+disturbs an in-progress siren activation; if a reloaded `Siren.Switch` no longer names a
+real output, the previously validated switch is kept and a warning is logged.
 
 ### Alerts
 

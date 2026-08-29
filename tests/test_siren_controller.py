@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import threading
 from typing import Any
 
@@ -19,10 +20,15 @@ SWITCH = "Siren O1"
 
 
 class FakeConfig:
-    """Minimal stand-in for SCConfigManager backed by a nested dict."""
+    """Minimal stand-in for SCConfigManager backed by a nested dict.
+
+    Supports the config hot-reload API: :meth:`simulate_change` swaps in new data and
+    advances the modification time, so :meth:`check_for_config_changes` reports a change.
+    """
 
     def __init__(self, data: dict[str, Any]) -> None:
         self._data = data
+        self._mtime = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
 
     def get(self, *keys: str, default: Any = None) -> Any:
         node: Any = self._data
@@ -32,6 +38,20 @@ class FakeConfig:
             else:
                 return default
         return node
+
+    def get_config_file_last_modified(self) -> dt.datetime:
+        return self._mtime
+
+    def check_for_config_changes(self, last_check: dt.datetime | None) -> dt.datetime | None:
+        """Report the new mtime when the (simulated) file has changed since ``last_check``."""
+        if last_check is None or self._mtime > last_check:
+            return self._mtime
+        return None
+
+    def simulate_change(self, data: dict[str, Any]) -> None:
+        """Replace the backing data and advance the modification time (a file edit)."""
+        self._data = data
+        self._mtime += dt.timedelta(seconds=1)
 
 
 class FakeLogger:
@@ -112,6 +132,37 @@ class Clock:
 SMS_RECIPIENTS = ["+15550001111"]
 
 
+def config_data(
+    *,
+    enable: bool = True,
+    switch: str = SWITCH,
+    min_events: int = 2,
+    min_sources: int = 2,
+    email: bool = False,
+    sms: bool = False,
+    disable_motion_events: bool = False,
+) -> dict[str, Any]:
+    """Build a config dict for the test doubles (also used to model an on-disk edit)."""
+    return {
+        "General": {
+            "PollingInterval": 10,
+            "DisableMotionEvents": disable_motion_events,
+        },
+        "Email": {"EnableEmail": email},
+        "SMS": {"EnableSMS": sms, "SendSMSTo": SMS_RECIPIENTS},
+        "Siren": {
+            "Enable": enable,
+            "Switch": switch,
+            "SirenDuration": 30,
+            "MinMotionEvents": min_events,
+            "MinMotionSources": min_sources,
+            "MinMotionInterval": 10,
+            "MaxMotionInterval": 60,
+            "PostTriggerSleepTimer": 60,
+        },
+    }
+
+
 def make_controller(
     *,
     enable: bool = True,
@@ -120,27 +171,35 @@ def make_controller(
     min_sources: int = 2,
     email: bool = False,
     sms: bool = False,
+    disable_motion_events: bool = False,
 ) -> tuple[SirenController, FakeWorker, FakeLogger, Clock]:
     """Build a controller wired to test doubles."""
     config = FakeConfig(
-        {
-            "General": {"PollingInterval": 10},
-            "Email": {"EnableEmail": email},
-            "SMS": {"EnableSMS": sms, "SendSMSTo": SMS_RECIPIENTS},
-            "Siren": {
-                "Enable": enable,
-                "Switch": switch,
-                "SirenDuration": 30,
-                "MinMotionEvents": min_events,
-                "MinMotionSources": min_sources,
-                "MinMotionInterval": 10,
-                "MaxMotionInterval": 60,
-                "PostTriggerSleepTimer": 60,
-            },
-        }
+        config_data(
+            enable=enable,
+            switch=switch,
+            min_events=min_events,
+            min_sources=min_sources,
+            email=email,
+            sms=sms,
+            disable_motion_events=disable_motion_events,
+        )
     )
     logger = FakeLogger()
     worker = FakeWorker(FakeView({SWITCH}))
+    clock = Clock()
+    wake_event = threading.Event()
+    inbox = ServiceEventInbox(wake_event)
+    controller = SirenController(config, logger, worker, inbox, wake_event, time_fn=clock)  # type: ignore[arg-type]
+    return controller, worker, logger, clock
+
+
+def controller_with_config(
+    config: FakeConfig, valid_outputs: set[str] | None = None
+) -> tuple[SirenController, FakeWorker, FakeLogger, Clock]:
+    """Build a controller around a caller-owned FakeConfig (for hot-reload tests)."""
+    logger = FakeLogger()
+    worker = FakeWorker(FakeView(valid_outputs if valid_outputs is not None else {SWITCH}))
     clock = Clock()
     wake_event = threading.Event()
     inbox = ServiceEventInbox(wake_event)
@@ -332,6 +391,49 @@ def test_ignore_action_has_no_effect(action: EndpointAction) -> None:
     assert worker.last_switch_state() is None
 
 
+# ── DisableMotionEvents ──────────────────────────────────────────────────────
+
+
+def test_disable_motion_events_ignores_motion() -> None:
+    """With General.DisableMotionEvents true, motion never triggers the siren."""
+    controller, worker, logger, clock = make_controller(disable_motion_events=True)
+
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
+    clock.advance(2)
+    controller._handle_event(motion("Camera 2"), clock())  # noqa: SLF001
+
+    assert controller.state == SirenState.IDLE
+    assert worker.last_switch_state() is None
+    # The ignored events are still logged.
+    assert any("DisableMotionEvents" in msg for _v, msg in logger.messages)
+
+
+def test_disable_motion_events_still_allows_start_siren() -> None:
+    """StartSiren works even when motion events are disabled."""
+    controller, worker, _logger, clock = make_controller(disable_motion_events=True)
+    event = ServiceEvent(
+        action=EndpointAction.START_SIREN, endpoint_name="Start", path="/siren/start"
+    )
+    controller._handle_event(event, clock())  # noqa: SLF001
+    assert controller.state == SirenState.SOUNDING
+    assert worker.last_switch_state() is True
+
+
+def test_disable_motion_events_still_allows_stop_and_reset() -> None:
+    """StopSiren and ResetSiren remain functional when motion events are disabled."""
+    controller, worker, _logger, clock = make_controller(disable_motion_events=True)
+
+    start = ServiceEvent(
+        action=EndpointAction.START_SIREN, endpoint_name="Start", path="/siren/start"
+    )
+    controller._handle_event(start, clock())  # noqa: SLF001
+    assert controller.state == SirenState.SOUNDING
+
+    controller._handle_event(reset_event(), clock())  # noqa: SLF001
+    assert controller.state == SirenState.IDLE
+    assert worker.last_switch_state() is False
+
+
 # ── ResetSiren ───────────────────────────────────────────────────────────────
 
 
@@ -458,3 +560,78 @@ def test_stopped_alert_not_sent_without_start() -> None:
     controller._handle_event(event, clock())  # noqa: SLF001
     assert logger.emails == []
     assert logger.sms == []
+
+
+# ── Config hot-reload ────────────────────────────────────────────────────────
+
+
+def test_reload_is_noop_when_file_unchanged() -> None:
+    """Without a file change, a reload check does nothing and logs no reload."""
+    config = FakeConfig(config_data(disable_motion_events=False))
+    controller, _worker, logger, _clock = controller_with_config(config)
+
+    controller._reload_config_if_changed()  # noqa: SLF001
+    assert not any("reloading" in msg.lower() for _v, msg in logger.messages)
+    assert controller.disable_motion_events is False
+
+
+def test_reload_applies_changed_settings() -> None:
+    """Editing the config file on disk takes effect on the next tick, without a restart."""
+    config = FakeConfig(config_data(disable_motion_events=False))
+    controller, worker, logger, clock = controller_with_config(config)
+
+    # Before the change, two-source motion triggers the siren.
+    _trigger(controller, clock)
+    assert controller.state == SirenState.SOUNDING
+    controller._handle_event(reset_event(), clock())  # noqa: SLF001  back to IDLE
+
+    # Edit the file to disable motion events, then reload.
+    config.simulate_change(config_data(disable_motion_events=True))
+    controller._reload_config_if_changed()  # noqa: SLF001
+    assert controller.disable_motion_events is True
+    assert any("reloading" in msg.lower() for _v, msg in logger.messages)
+
+    # Motion is now ignored.
+    clock.advance(20)
+    _trigger(controller, clock)
+    assert controller.state == SirenState.IDLE
+    assert worker.last_switch_state() is False  # last command was the reset's switch-off
+
+
+def test_reload_updates_motion_tracker_thresholds() -> None:
+    """A reload rebuilds the MotionTracker so new trigger thresholds apply immediately."""
+    config = FakeConfig(config_data(min_events=2, min_sources=2))
+    controller, _worker, _logger, clock = controller_with_config(config)
+
+    # Loosen the trigger to a single source, then reload.
+    config.simulate_change(config_data(min_events=1, min_sources=1))
+    controller._reload_config_if_changed()  # noqa: SLF001
+
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
+    assert controller.state == SirenState.SOUNDING
+
+
+def test_reload_keeps_previous_switch_when_new_one_is_invalid() -> None:
+    """A reload naming an unknown Siren.Switch keeps the previous validated switch."""
+    config = FakeConfig(config_data(switch=SWITCH))
+    controller, _worker, logger, _clock = controller_with_config(config)
+
+    config.simulate_change(config_data(switch="Nonexistent"))
+    controller._reload_config_if_changed()  # noqa: SLF001
+
+    assert controller.switch == SWITCH
+    assert any("keeping previous switch" in msg for _v, msg in logger.messages)
+
+
+def test_reload_adopts_new_valid_switch() -> None:
+    """A reload naming a different, valid output adopts it."""
+    other = "Siren O2"
+    config = FakeConfig(config_data(switch=SWITCH))
+    controller, _worker, _logger, _clock = controller_with_config(
+        config, valid_outputs={SWITCH, other}
+    )
+
+    config.simulate_change(config_data(switch=other))
+    controller._reload_config_if_changed()  # noqa: SLF001
+
+    assert controller.switch == other

@@ -14,6 +14,7 @@ class ConfigSchema:
                 "schema": {
                     "AppName": {"type": "string", "required": False, "nullable": True},
                     "PollingInterval": {"type": "number", "required": False, "nullable": True, "min": 1, "max": 3600},
+                    "DisableMotionEvents": {"type": "boolean", "required": False, "nullable": True},
                 },
             },
             "SMS": {
