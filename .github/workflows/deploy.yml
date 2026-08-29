@@ -1,0 +1,29 @@
+name: Deploy eufy-siren
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - pi-spello
+
+jobs:
+  deploy-pi-spello:
+    name: Deploy → pi-spello
+    if: ${{ inputs.environment == 'pi-spello' || inputs.environment == 'both' }}
+    runs-on: [self-hosted, pi-spello]
+    environment: pi-spello
+    steps:
+      - name: Pull latest from GitHub
+        run: sudo git -C /home/<User>/scripts/eufy-siren pull
+
+      - name: Restart service
+        run: sudo systemctl restart eufy-siren
+
+      - name: Verify service is running
+        run: |
+          sleep 6
+          sudo systemctl is-active eufy-siren
