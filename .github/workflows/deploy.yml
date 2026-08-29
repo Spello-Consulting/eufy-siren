@@ -17,13 +17,18 @@ jobs:
     runs-on: [self-hosted, pi-spello]
     environment: pi-spello
     steps:
-      - name: Pull latest from GitHub
-        run: sudo git -C /home/pi/scripts/eufy-siren pull
+      - name: Stop the service
+        run: |
+          sudo --chdir=/home/pi/scripts/eufy-siren /home/pi/scripts/pyutil/servicectrl.sh stop
 
-      - name: Restart service
-        run: sudo systemctl restart eufy-siren
+      - name: Pull latest from GitHub
+        run: |
+          sudo --chdir=/home/pi/scripts/eufy-siren /home/pi/scripts/pyutil/gitrefresh.sh --yes
+
+      - name: Deploy and start the service
+        run: sudo --chdir=/home/pi/scripts/eufy-siren /home/pi/scripts/pyutil/servicectrl.sh deploy pi-spello
 
       - name: Verify service is running
         run: |
           sleep 6
-          sudo systemctl is-active eufy-siren
+          sudo --chdir=/home/pi/scripts/eufy-siren /home/pi/scripts/pyutil/servicectrl.sh is-active
