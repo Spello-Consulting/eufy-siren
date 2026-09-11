@@ -3,7 +3,7 @@
 General:
   AppName: eufy-siren
   PollingInterval: 10
-  DisableMotionEvents: True
+  DisableMotionEvents: False
 
 Files:
   LogfileName: logs/logfile.log
