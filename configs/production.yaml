@@ -68,7 +68,13 @@ ServiceAPI:
     - Name: "Reset Siren"
       Path: "/siren/reset"
       Action: "ResetSiren"
-
+    - Name: "Enable Motion"
+      Path: "/motion/enable"
+      Action: "EnableMotion"
+    - Name: "Disable Motion"
+      Path: "/motion/disable"
+      Action: "DisableMotion"
+      
 Siren:
   Enable: True
   Switch: "Spello Siren O1"
