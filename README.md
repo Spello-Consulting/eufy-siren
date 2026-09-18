@@ -89,7 +89,7 @@ Key sections:
 General:
   AppName: eufy-siren
   PollingInterval: 10             # controller tick interval (seconds)
-  DisableMotionEvents: False      # True = log motion events but never let them sound the siren
+  MotionEventsControl: Enabled    # Disabled | Enabled | APIControl (default: Enabled)
 
 SCSmartDevices:                 # The smart switch(es) — validated by sc-smart-device
   Devices:
@@ -108,7 +108,7 @@ ServiceAPI:
   Endpoints:
     - Name: "Camera 1"
       Path: "/motion/camera1"
-      Action: "Motion"          # Motion | StartSiren | StopSiren | Ignore
+      Action: "Motion"          # Motion | StartSiren | StopSiren | ResetSiren | EnableMotion | DisableMotion | Ignore
     - Name: "Start Siren"
       Path: "/siren/start"
       Action: "StartSiren"
@@ -131,16 +131,36 @@ Siren:
 fatal error. The `Files`, `Email` and `HeartbeatMonitor` sections are handled by
 `sc-foundation-services` (logging, email alerts, and an uptime heartbeat ping).
 
-Set `General.DisableMotionEvents` to `True` to have the app **log every motion event but
-never let it sound the siren** — useful while you are home and Apple Home is still
-forwarding Eufy motion events. Manual `StartSiren`, `StopSiren` and `ResetSiren` requests
-remain fully active, so you can still arm the siren on demand.
+### Motion events control
+
+`General.MotionEventsControl` decides whether incoming `Motion` events are allowed to sound
+the siren. It takes one of three values (default `Enabled` when the key is null or missing):
+
+| Value        | Effect |
+|--------------|--------|
+| `Enabled`    | Motion events are processed normally (the default). |
+| `Disabled`   | Motion events are **logged but never let the siren sound** — useful while you are home and Apple Home is still forwarding Eufy motion events. |
+| `APIControl` | Motion processing is toggled at runtime by the `EnableMotion` / `DisableMotion` endpoints (see [Endpoint actions](#endpoint-actions)). It starts **disabled** and remembers its last state across restarts (see [saved-state.json](#saved-statejson)). |
+
+In every mode, manual `StartSiren`, `StopSiren` and `ResetSiren` requests remain fully
+active, so you can always arm the siren on demand.
+
+#### saved-state.json
+
+In `APIControl` mode the app records the most recent `EnableMotion` / `DisableMotion`
+decision in a `saved-state.json` file at the project root. On startup it restores that
+state, so (for example) if motion was enabled and the machine restarts after a power
+failure, motion stays enabled. The file is **deleted** whenever `MotionEventsControl` is
+`Enabled` or `Disabled` (config is authoritative in those modes). It is runtime state and is
+gitignored — you never edit it by hand.
 
 **Config hot-reload:** the controller checks the config file on each tick and reloads it
-automatically when it changes on disk, so edits (for example flipping
-`General.DisableMotionEvents`) take effect **without restarting the app**. The reload never
+automatically when it changes on disk, so edits (for example changing
+`General.MotionEventsControl`) take effect **without restarting the app**. The reload never
 disturbs an in-progress siren activation; if a reloaded `Siren.Switch` no longer names a
-real output, the previously validated switch is kept and a warning is logged.
+real output, the previously validated switch is kept and a warning is logged. Switching a
+config reload *into* `APIControl` starts motion disabled; an unrelated edit while already in
+`APIControl` preserves the current enabled/disabled state.
 
 ### Alerts
 
@@ -173,6 +193,8 @@ environment (Twilio); see `SCLogger.send_sms` for the variables.
 | `StartSiren` | Sound the siren immediately, ignoring motion conditions (and clearing any cooldown). |
 | `StopSiren` | Stop the siren immediately and begin the cooldown. |
 | `ResetSiren` | Stop the siren (if on) and return to the idle condition. |
+| `EnableMotion` | Enable motion processing. Only takes effect when `MotionEventsControl` is `APIControl`; logged and ignored otherwise. |
+| `DisableMotion` | Disable motion processing. Only takes effect when `MotionEventsControl` is `APIControl`; logged and ignored otherwise. |
 | `Ignore` | Logged but never counted (useful to wire up a camera without arming it). |
 
 Every request — recognised or not — is logged. Unknown paths return `404`.

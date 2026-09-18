@@ -92,6 +92,41 @@ def test_invalid_endpoint_action_fails(tmp_config: Callable[[str], Path]) -> Non
         SCConfigManager(config_file=str(path), validation_schema=_merged_schema())
 
 
+@pytest.mark.parametrize("mode", ["Disabled", "Enabled", "APIControl"])
+def test_motion_events_control_values_pass(
+    tmp_config: Callable[[str], Path], mode: str
+) -> None:
+    """Each allowed MotionEventsControl value validates."""
+    text = _VALID_CONFIG.replace(
+        "  PollingInterval: 10", f"  PollingInterval: 10\n  MotionEventsControl: {mode}"
+    )
+    path = _write_config(tmp_config, text)
+    config = SCConfigManager(config_file=str(path), validation_schema=_merged_schema())
+    assert config.get("General", "MotionEventsControl") == mode
+
+
+def test_invalid_motion_events_control_fails(tmp_config: Callable[[str], Path]) -> None:
+    """An unknown MotionEventsControl value is rejected by the schema."""
+    text = _VALID_CONFIG.replace(
+        "  PollingInterval: 10",
+        "  PollingInterval: 10\n  MotionEventsControl: Sometimes",
+    )
+    path = _write_config(tmp_config, text)
+    with pytest.raises(RuntimeError):
+        SCConfigManager(config_file=str(path), validation_schema=_merged_schema())
+
+
+@pytest.mark.parametrize("action", ["EnableMotion", "DisableMotion"])
+def test_motion_control_endpoint_actions_pass(
+    tmp_config: Callable[[str], Path], action: str
+) -> None:
+    """The new EnableMotion/DisableMotion endpoint actions validate."""
+    text = _VALID_CONFIG.replace('Action: "Motion"', f'Action: "{action}"')
+    path = _write_config(tmp_config, text)
+    config = SCConfigManager(config_file=str(path), validation_schema=_merged_schema())
+    assert config.get("ServiceAPI", "Endpoints")[0]["Action"] == action
+
+
 def test_out_of_range_port_fails(tmp_config: Callable[[str], Path]) -> None:
     """A port outside the allowed range is rejected."""
     bad = _VALID_CONFIG.replace("Port: 8085", "Port: 70000")
@@ -103,5 +138,7 @@ def test_out_of_range_port_fails(tmp_config: Callable[[str], Path]) -> None:
 def test_shipped_development_config_is_valid() -> None:
     """The committed development config validates against the merged schema."""
     dev_config = REPO_ROOT / "configs" / "development.yaml"
-    config = SCConfigManager(config_file=str(dev_config), validation_schema=_merged_schema())
+    config = SCConfigManager(
+        config_file=str(dev_config), validation_schema=_merged_schema()
+    )
     assert config.get("ServiceAPI", "Port") == 8085

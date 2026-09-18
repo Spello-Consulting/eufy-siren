@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import tempfile
 import threading
+import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,6 +17,14 @@ from local_enumerations import EndpointAction, SirenState
 from siren_controller import SirenController
 
 SWITCH = "Siren O1"
+
+
+def _unique_state_path() -> Path:
+    """Return a unique, non-existent saved-state path in the system temp dir.
+
+    Keeps tests that don't care about persistence from writing to the real project root.
+    """
+    return Path(tempfile.gettempdir()) / f"eufy-siren-test-{uuid.uuid4().hex}.json"
 
 
 # ── Test doubles ─────────────────────────────────────────────────────────────
@@ -42,7 +53,9 @@ class FakeConfig:
     def get_config_file_last_modified(self) -> dt.datetime:
         return self._mtime
 
-    def check_for_config_changes(self, last_check: dt.datetime | None) -> dt.datetime | None:
+    def check_for_config_changes(
+        self, last_check: dt.datetime | None
+    ) -> dt.datetime | None:
         """Report the new mtime when the (simulated) file has changed since ``last_check``."""
         if last_check is None or self._mtime > last_check:
             return self._mtime
@@ -140,13 +153,13 @@ def config_data(
     min_sources: int = 2,
     email: bool = False,
     sms: bool = False,
-    disable_motion_events: bool = False,
+    motion_events_control: str = "Enabled",
 ) -> dict[str, Any]:
     """Build a config dict for the test doubles (also used to model an on-disk edit)."""
     return {
         "General": {
             "PollingInterval": 10,
-            "DisableMotionEvents": disable_motion_events,
+            "MotionEventsControl": motion_events_control,
         },
         "Email": {"EnableEmail": email},
         "SMS": {"EnableSMS": sms, "SendSMSTo": SMS_RECIPIENTS},
@@ -171,7 +184,8 @@ def make_controller(
     min_sources: int = 2,
     email: bool = False,
     sms: bool = False,
-    disable_motion_events: bool = False,
+    motion_events_control: str = "Enabled",
+    state_path: Path | None = None,
 ) -> tuple[SirenController, FakeWorker, FakeLogger, Clock]:
     """Build a controller wired to test doubles."""
     config = FakeConfig(
@@ -182,7 +196,7 @@ def make_controller(
             min_sources=min_sources,
             email=email,
             sms=sms,
-            disable_motion_events=disable_motion_events,
+            motion_events_control=motion_events_control,
         )
     )
     logger = FakeLogger()
@@ -190,26 +204,48 @@ def make_controller(
     clock = Clock()
     wake_event = threading.Event()
     inbox = ServiceEventInbox(wake_event)
-    controller = SirenController(config, logger, worker, inbox, wake_event, time_fn=clock)  # type: ignore[arg-type]
+    controller = SirenController(
+        config,
+        logger,
+        worker,
+        inbox,
+        wake_event,
+        time_fn=clock,  # type: ignore[arg-type]
+        state_path=state_path if state_path is not None else _unique_state_path(),
+    )
     return controller, worker, logger, clock
 
 
 def controller_with_config(
-    config: FakeConfig, valid_outputs: set[str] | None = None
+    config: FakeConfig,
+    valid_outputs: set[str] | None = None,
+    state_path: Path | None = None,
 ) -> tuple[SirenController, FakeWorker, FakeLogger, Clock]:
     """Build a controller around a caller-owned FakeConfig (for hot-reload tests)."""
     logger = FakeLogger()
-    worker = FakeWorker(FakeView(valid_outputs if valid_outputs is not None else {SWITCH}))
+    worker = FakeWorker(
+        FakeView(valid_outputs if valid_outputs is not None else {SWITCH})
+    )
     clock = Clock()
     wake_event = threading.Event()
     inbox = ServiceEventInbox(wake_event)
-    controller = SirenController(config, logger, worker, inbox, wake_event, time_fn=clock)  # type: ignore[arg-type]
+    controller = SirenController(
+        config,
+        logger,
+        worker,
+        inbox,
+        wake_event,
+        time_fn=clock,  # type: ignore[arg-type]
+        state_path=state_path if state_path is not None else _unique_state_path(),
+    )
     return controller, worker, logger, clock
 
 
 def motion(source: str) -> ServiceEvent:
     """Build a Motion event from the given source endpoint."""
-    return ServiceEvent(action=EndpointAction.MOTION, endpoint_name=source, path=f"/motion/{source}")
+    return ServiceEvent(
+        action=EndpointAction.MOTION, endpoint_name=source, path=f"/motion/{source}"
+    )
 
 
 # ── Runtime validation ───────────────────────────────────────────────────────
@@ -346,7 +382,9 @@ def test_stop_siren_endpoint_stops_and_starts_cooldown() -> None:
     controller._handle_event(motion("Camera 2"), clock())  # noqa: SLF001
     assert controller.state == SirenState.SOUNDING
 
-    event = ServiceEvent(action=EndpointAction.STOP_SIREN, endpoint_name="Stop", path="/siren/stop")
+    event = ServiceEvent(
+        action=EndpointAction.STOP_SIREN, endpoint_name="Stop", path="/siren/stop"
+    )
     controller._handle_event(event, clock())  # noqa: SLF001
     assert controller.state == SirenState.COOLDOWN
     assert worker.last_switch_state() is False
@@ -385,18 +423,22 @@ def test_disabled_siren_does_not_sound() -> None:
 def test_ignore_action_has_no_effect(action: EndpointAction) -> None:
     """An Ignore endpoint never advances the state machine."""
     controller, worker, _logger, clock = make_controller()
-    event = ServiceEvent(action=action, endpoint_name="Camera 4", path="/motion/camera4")
+    event = ServiceEvent(
+        action=action, endpoint_name="Camera 4", path="/motion/camera4"
+    )
     controller._handle_event(event, clock())  # noqa: SLF001
     assert controller.state == SirenState.IDLE
     assert worker.last_switch_state() is None
 
 
-# ── DisableMotionEvents ──────────────────────────────────────────────────────
+# ── MotionEventsControl: Disabled mode ───────────────────────────────────────
 
 
-def test_disable_motion_events_ignores_motion() -> None:
-    """With General.DisableMotionEvents true, motion never triggers the siren."""
-    controller, worker, logger, clock = make_controller(disable_motion_events=True)
+def test_disabled_mode_ignores_motion() -> None:
+    """With MotionEventsControl Disabled, motion never triggers the siren."""
+    controller, worker, logger, clock = make_controller(
+        motion_events_control="Disabled"
+    )
 
     controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
     clock.advance(2)
@@ -405,12 +447,14 @@ def test_disable_motion_events_ignores_motion() -> None:
     assert controller.state == SirenState.IDLE
     assert worker.last_switch_state() is None
     # The ignored events are still logged.
-    assert any("DisableMotionEvents" in msg for _v, msg in logger.messages)
+    assert any("motion events are disabled" in msg for _v, msg in logger.messages)
 
 
-def test_disable_motion_events_still_allows_start_siren() -> None:
+def test_disabled_mode_still_allows_start_siren() -> None:
     """StartSiren works even when motion events are disabled."""
-    controller, worker, _logger, clock = make_controller(disable_motion_events=True)
+    controller, worker, _logger, clock = make_controller(
+        motion_events_control="Disabled"
+    )
     event = ServiceEvent(
         action=EndpointAction.START_SIREN, endpoint_name="Start", path="/siren/start"
     )
@@ -419,9 +463,11 @@ def test_disable_motion_events_still_allows_start_siren() -> None:
     assert worker.last_switch_state() is True
 
 
-def test_disable_motion_events_still_allows_stop_and_reset() -> None:
+def test_disabled_mode_still_allows_stop_and_reset() -> None:
     """StopSiren and ResetSiren remain functional when motion events are disabled."""
-    controller, worker, _logger, clock = make_controller(disable_motion_events=True)
+    controller, worker, _logger, clock = make_controller(
+        motion_events_control="Disabled"
+    )
 
     start = ServiceEvent(
         action=EndpointAction.START_SIREN, endpoint_name="Start", path="/siren/start"
@@ -434,12 +480,141 @@ def test_disable_motion_events_still_allows_stop_and_reset() -> None:
     assert worker.last_switch_state() is False
 
 
+# ── MotionEventsControl: APIControl mode + saved-state.json ───────────────────
+
+
+def enable_motion_event() -> ServiceEvent:
+    """Build an EnableMotion command event."""
+    return ServiceEvent(
+        action=EndpointAction.ENABLE_MOTION,
+        endpoint_name="Enable",
+        path="/motion/enable",
+    )
+
+
+def disable_motion_event() -> ServiceEvent:
+    """Build a DisableMotion command event."""
+    return ServiceEvent(
+        action=EndpointAction.DISABLE_MOTION,
+        endpoint_name="Disable",
+        path="/motion/disable",
+    )
+
+
+def _fire_two_source_motion(controller: SirenController, clock: Clock) -> None:
+    """Feed two qualifying motion events from distinct sources."""
+    controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001
+    clock.advance(2)
+    controller._handle_event(motion("Camera 2"), clock())  # noqa: SLF001
+
+
+def test_api_control_ignores_motion_until_enabled(tmp_path: Path) -> None:
+    """APIControl starts disabled: motion is ignored until EnableMotion arrives."""
+    controller, worker, _logger, clock = make_controller(
+        motion_events_control="APIControl", state_path=tmp_path / "saved-state.json"
+    )
+    _fire_two_source_motion(controller, clock)
+    assert controller.state == SirenState.IDLE
+    assert worker.last_switch_state() is None
+
+
+def test_api_control_enable_then_motion_triggers(tmp_path: Path) -> None:
+    """After EnableMotion in APIControl, qualifying motion triggers the siren."""
+    controller, worker, _logger, clock = make_controller(
+        motion_events_control="APIControl", state_path=tmp_path / "saved-state.json"
+    )
+    controller._handle_event(enable_motion_event(), clock())  # noqa: SLF001
+    _fire_two_source_motion(controller, clock)
+    assert controller.state == SirenState.SOUNDING
+    assert worker.last_switch_state() is True
+
+
+def test_api_control_disable_after_enable_ignores_motion(tmp_path: Path) -> None:
+    """DisableMotion in APIControl turns motion gating back off."""
+    controller, worker, _logger, clock = make_controller(
+        motion_events_control="APIControl", state_path=tmp_path / "saved-state.json"
+    )
+    controller._handle_event(enable_motion_event(), clock())  # noqa: SLF001
+    controller._handle_event(disable_motion_event(), clock())  # noqa: SLF001
+    _fire_two_source_motion(controller, clock)
+    assert controller.state == SirenState.IDLE
+    assert worker.last_switch_state() is None
+
+
+def test_enable_motion_persists_state(tmp_path: Path) -> None:
+    """EnableMotion writes the enabled flag to saved-state.json; DisableMotion rewrites it."""
+    state_path = tmp_path / "saved-state.json"
+    controller, _worker, _logger, clock = make_controller(
+        motion_events_control="APIControl", state_path=state_path
+    )
+    controller._handle_event(enable_motion_event(), clock())  # noqa: SLF001
+    assert state_path.exists()
+    assert controller._read_saved_state() is True  # noqa: SLF001
+
+    controller._handle_event(disable_motion_event(), clock())  # noqa: SLF001
+    assert controller._read_saved_state() is False  # noqa: SLF001
+
+
+def test_api_control_restores_enabled_state_on_startup(tmp_path: Path) -> None:
+    """A fresh APIControl controller restores an enabled flag from an existing file."""
+    state_path = tmp_path / "saved-state.json"
+    # First controller enables motion and persists it.
+    first, _worker, _logger, clock = make_controller(
+        motion_events_control="APIControl", state_path=state_path
+    )
+    first._handle_event(enable_motion_event(), clock())  # noqa: SLF001
+    assert state_path.exists()
+
+    # A fresh controller (simulating a restart) restores the enabled state.
+    second, worker, _logger2, clock2 = make_controller(
+        motion_events_control="APIControl", state_path=state_path
+    )
+    assert second._motion_currently_enabled() is True  # noqa: SLF001
+    _fire_two_source_motion(second, clock2)
+    assert second.state == SirenState.SOUNDING
+    assert worker.last_switch_state() is True
+
+
+def test_fixed_mode_deletes_saved_state_on_startup(tmp_path: Path) -> None:
+    """Starting in a fixed mode removes any leftover saved-state.json."""
+    state_path = tmp_path / "saved-state.json"
+    state_path.write_text('{"motion_api_enabled": true}')
+    make_controller(motion_events_control="Enabled", state_path=state_path)
+    assert not state_path.exists()
+
+
+def test_fixed_mode_ignores_motion_control_actions(tmp_path: Path) -> None:
+    """EnableMotion/DisableMotion are logged and ignored in a fixed mode (no file write)."""
+    state_path = tmp_path / "saved-state.json"
+    controller, _worker, logger, clock = make_controller(
+        motion_events_control="Enabled", state_path=state_path
+    )
+    controller._handle_event(disable_motion_event(), clock())  # noqa: SLF001
+    # Fixed Enabled mode still processes motion, and no state file is written.
+    assert controller._motion_currently_enabled() is True  # noqa: SLF001
+    assert not state_path.exists()
+    assert any("not APIControl" in msg for _v, msg in logger.messages)
+
+
+def test_corrupt_saved_state_treated_as_disabled(tmp_path: Path) -> None:
+    """A malformed saved-state.json is treated as disabled without crashing."""
+    state_path = tmp_path / "saved-state.json"
+    state_path.write_text("{ this is not valid json")
+    controller, _worker, logger, _clock = make_controller(
+        motion_events_control="APIControl", state_path=state_path
+    )
+    assert controller._motion_currently_enabled() is False  # noqa: SLF001
+    assert any("saved-state" in msg for _v, msg in logger.messages)
+
+
 # ── ResetSiren ───────────────────────────────────────────────────────────────
 
 
 def reset_event() -> ServiceEvent:
     """Build a ResetSiren command event."""
-    return ServiceEvent(action=EndpointAction.RESET_SIREN, endpoint_name="Reset", path="/siren/reset")
+    return ServiceEvent(
+        action=EndpointAction.RESET_SIREN, endpoint_name="Reset", path="/siren/reset"
+    )
 
 
 def test_reset_siren_from_sounding_stops_and_returns_to_idle() -> None:
@@ -505,9 +680,13 @@ def test_alerts_sent_on_start_and_stop() -> None:
     _trigger(controller, clock)
     assert len(logger.emails) == 1
     assert len(logger.sms) == 1
-    assert logger.sms[0][1] == SMS_RECIPIENTS  # configured recipients are passed through
+    assert (
+        logger.sms[0][1] == SMS_RECIPIENTS
+    )  # configured recipients are passed through
 
-    event = ServiceEvent(action=EndpointAction.STOP_SIREN, endpoint_name="Stop", path="/siren/stop")
+    event = ServiceEvent(
+        action=EndpointAction.STOP_SIREN, endpoint_name="Stop", path="/siren/stop"
+    )
     controller._handle_event(event, clock())  # noqa: SLF001
     assert len(logger.emails) == 2
     assert len(logger.sms) == 2
@@ -521,7 +700,9 @@ def test_started_alert_sent_only_once_while_sounding() -> None:
 
     clock.advance(5)
     controller._handle_event(motion("Camera 1"), clock())  # noqa: SLF001  motion-following
-    start = ServiceEvent(action=EndpointAction.START_SIREN, endpoint_name="Start", path="/siren/start")
+    start = ServiceEvent(
+        action=EndpointAction.START_SIREN, endpoint_name="Start", path="/siren/start"
+    )
     controller._handle_event(start, clock())  # noqa: SLF001  re-invoked while sounding
     assert len(logger.emails) == 1
     assert len(logger.sms) == 1
@@ -556,7 +737,9 @@ def test_reset_from_sounding_sends_stopped_alert() -> None:
 def test_stopped_alert_not_sent_without_start() -> None:
     """StopSiren from IDLE (no active siren) sends no stopped alert."""
     controller, _worker, logger, clock = make_controller(email=True, sms=True)
-    event = ServiceEvent(action=EndpointAction.STOP_SIREN, endpoint_name="Stop", path="/siren/stop")
+    event = ServiceEvent(
+        action=EndpointAction.STOP_SIREN, endpoint_name="Stop", path="/siren/stop"
+    )
     controller._handle_event(event, clock())  # noqa: SLF001
     assert logger.emails == []
     assert logger.sms == []
@@ -567,17 +750,17 @@ def test_stopped_alert_not_sent_without_start() -> None:
 
 def test_reload_is_noop_when_file_unchanged() -> None:
     """Without a file change, a reload check does nothing and logs no reload."""
-    config = FakeConfig(config_data(disable_motion_events=False))
+    config = FakeConfig(config_data(motion_events_control="Enabled"))
     controller, _worker, logger, _clock = controller_with_config(config)
 
     controller._reload_config_if_changed()  # noqa: SLF001
     assert not any("reloading" in msg.lower() for _v, msg in logger.messages)
-    assert controller.disable_motion_events is False
+    assert controller._motion_currently_enabled() is True  # noqa: SLF001
 
 
 def test_reload_applies_changed_settings() -> None:
     """Editing the config file on disk takes effect on the next tick, without a restart."""
-    config = FakeConfig(config_data(disable_motion_events=False))
+    config = FakeConfig(config_data(motion_events_control="Enabled"))
     controller, worker, logger, clock = controller_with_config(config)
 
     # Before the change, two-source motion triggers the siren.
@@ -586,16 +769,18 @@ def test_reload_applies_changed_settings() -> None:
     controller._handle_event(reset_event(), clock())  # noqa: SLF001  back to IDLE
 
     # Edit the file to disable motion events, then reload.
-    config.simulate_change(config_data(disable_motion_events=True))
+    config.simulate_change(config_data(motion_events_control="Disabled"))
     controller._reload_config_if_changed()  # noqa: SLF001
-    assert controller.disable_motion_events is True
+    assert controller._motion_currently_enabled() is False  # noqa: SLF001
     assert any("reloading" in msg.lower() for _v, msg in logger.messages)
 
     # Motion is now ignored.
     clock.advance(20)
     _trigger(controller, clock)
     assert controller.state == SirenState.IDLE
-    assert worker.last_switch_state() is False  # last command was the reset's switch-off
+    assert (
+        worker.last_switch_state() is False
+    )  # last command was the reset's switch-off
 
 
 def test_reload_updates_motion_tracker_thresholds() -> None:
@@ -635,3 +820,51 @@ def test_reload_adopts_new_valid_switch() -> None:
     controller._reload_config_if_changed()  # noqa: SLF001
 
     assert controller.switch == other
+
+
+def test_reload_into_api_control_starts_disabled(tmp_path: Path) -> None:
+    """Switching Enabled → APIControl on reload resets the runtime flag to disabled."""
+    state_path = tmp_path / "saved-state.json"
+    config = FakeConfig(config_data(motion_events_control="Enabled"))
+    controller, _worker, _logger, _clock = controller_with_config(
+        config, state_path=state_path
+    )
+    assert controller._motion_currently_enabled() is True  # noqa: SLF001
+
+    config.simulate_change(config_data(motion_events_control="APIControl"))
+    controller._reload_config_if_changed()  # noqa: SLF001
+    assert controller._motion_currently_enabled() is False  # noqa: SLF001
+
+
+def test_reload_into_fixed_mode_deletes_saved_state(tmp_path: Path) -> None:
+    """Switching APIControl → Enabled on reload clears the flag and deletes the state file."""
+    state_path = tmp_path / "saved-state.json"
+    config = FakeConfig(config_data(motion_events_control="APIControl"))
+    controller, _worker, _logger, clock = controller_with_config(
+        config, state_path=state_path
+    )
+    controller._handle_event(enable_motion_event(), clock())  # noqa: SLF001
+    assert state_path.exists()
+
+    config.simulate_change(config_data(motion_events_control="Enabled"))
+    controller._reload_config_if_changed()  # noqa: SLF001
+    assert not state_path.exists()
+    assert controller._motion_currently_enabled() is True  # noqa: SLF001  (fixed Enabled)
+
+
+def test_reload_within_api_control_preserves_flag(tmp_path: Path) -> None:
+    """An unrelated reload while in APIControl leaves the API-set flag untouched."""
+    state_path = tmp_path / "saved-state.json"
+    config = FakeConfig(config_data(motion_events_control="APIControl"))
+    controller, _worker, _logger, clock = controller_with_config(
+        config, state_path=state_path
+    )
+    controller._handle_event(enable_motion_event(), clock())  # noqa: SLF001
+    assert controller._motion_currently_enabled() is True  # noqa: SLF001
+
+    # An unrelated edit (different switch) that keeps APIControl must not clobber the flag.
+    config.simulate_change(
+        config_data(motion_events_control="APIControl", min_events=1)
+    )
+    controller._reload_config_if_changed()  # noqa: SLF001
+    assert controller._motion_currently_enabled() is True  # noqa: SLF001
