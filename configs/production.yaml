@@ -4,7 +4,7 @@ General:
   AppName: eufy-siren
   PollingInterval: 10
   # Disabled | Enabled | APIControl (default when null/missing: Enabled).
-  MotionEventsControl: Enabled
+  MotionEventsControl: APIControl
 
 Files:
   LogfileName: logs/logfile.log
