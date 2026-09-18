@@ -18,17 +18,34 @@ When the siren starts and again when it stops, an alert is sent via email (if
 ``Email.EnableEmail``) and/or SMS (if ``SMS.EnableSMS``), using ``SCLogger.send_email`` and
 ``SCLogger.send_sms``. A flag ensures exactly one started alert per activation.
 
-The clock is injected (``time_fn``) so the timing behaviour can be unit-tested deterministically.
+Whether an incoming ``Motion`` event is processed depends on ``General.MotionEventsControl``:
+``Disabled`` never processes motion, ``Enabled`` always does, and ``APIControl`` gates motion
+on a runtime flag toggled by the ``EnableMotion``/``DisableMotion`` ServiceAPI actions. In
+``APIControl`` mode that flag is persisted to ``saved-state.json`` (at the project root) so an
+``EnableMotion`` decision survives a restart or power failure; the file is deleted whenever the
+mode is a fixed ``Enabled``/``Disabled``.
+
+The clock is injected (``time_fn``) and the saved-state path (``state_path``) so both the timing
+and persistence behaviour can be unit-tested deterministically.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sc_foundation import JSONEncoder, SCCommon
 from sc_smart_device import DeviceSequenceRequest, DeviceStep, StepKind
 
-from local_enumerations import EndpointAction, SirenState
+from local_enumerations import (
+    SAVED_STATE_FILE,
+    SAVED_STATE_KEY,
+    EndpointAction,
+    MotionEventsControl,
+    SirenState,
+)
 from motion_tracker import MotionTracker
 
 if TYPE_CHECKING:
@@ -56,6 +73,8 @@ class SirenController:
         inbox: Thread-safe inbox of ServiceAPI events.
         wake_event: Event the controller clears each tick and waits on between ticks.
         time_fn: Monotonic clock function, injectable for testing.
+        state_path: Path to the ``saved-state.json`` file used to persist the ``APIControl``
+            motion flag. Defaults to ``<project root>/saved-state.json``; injectable for testing.
     """
 
     def __init__(
@@ -66,6 +85,7 @@ class SirenController:
         inbox: ServiceEventInbox,
         wake_event: Event,
         time_fn: Callable[[], float] = time.monotonic,
+        state_path: Path | None = None,
     ) -> None:
         self.config = config
         self.logger = logger
@@ -73,6 +93,16 @@ class SirenController:
         self.inbox = inbox
         self.wake_event = wake_event
         self._time_fn = time_fn
+        self._state_path = (
+            state_path
+            if state_path is not None
+            else Path(SCCommon.get_project_root()) / SAVED_STATE_FILE
+        )
+
+        # Motion-gating state, initialised before the first settings load so
+        # _load_settings can detect the first (construction-time) transition into APIControl.
+        self._motion_mode: MotionEventsControl | None = None
+        self._motion_api_enabled = False
 
         # Configuration-derived settings, loaded here and again on every hot-reload.
         self._load_settings()
@@ -99,29 +129,166 @@ class SirenController:
         """
         config = self.config
         self.enabled = bool(config.get("Siren", "Enable", default=True))
-        # When true, motion events are logged but ignored — they cannot trigger the siren.
-        # Manual StartSiren/StopSiren/ResetSiren actions remain fully enabled.
-        self.disable_motion_events = bool(
-            config.get("General", "DisableMotionEvents", default=False)
+        self._apply_motion_mode(
+            config.get("General", "MotionEventsControl", default=None)
         )
         self.switch = str(config.get("Siren", "Switch", default="") or "")
-        self.siren_duration = _as_float(config.get("Siren", "SirenDuration", default=30), 30.0)
+        self.siren_duration = _as_float(
+            config.get("Siren", "SirenDuration", default=30), 30.0
+        )
         self.post_trigger_sleep = _as_float(
             config.get("Siren", "PostTriggerSleepTimer", default=60), 60.0
         )
-        self.poll_interval = _as_float(config.get("General", "PollingInterval", default=10), 10.0)
+        self.poll_interval = _as_float(
+            config.get("General", "PollingInterval", default=10), 10.0
+        )
 
         # Alert notifications on siren start/stop (email and/or SMS).
-        self.email_alerts_enabled = bool(config.get("Email", "EnableEmail", default=False))
+        self.email_alerts_enabled = bool(
+            config.get("Email", "EnableEmail", default=False)
+        )
         self.sms_alerts_enabled = bool(config.get("SMS", "EnableSMS", default=False))
         self._sms_recipients = list(config.get("SMS", "SendSMSTo", default=[]) or [])
 
         self.tracker = MotionTracker(
-            min_events=int(_as_float(config.get("Siren", "MinMotionEvents", default=1), 1)),
-            min_sources=int(_as_float(config.get("Siren", "MinMotionSources", default=1), 1)),
-            min_interval=_as_float(config.get("Siren", "MinMotionInterval", default=10), 10.0),
-            max_interval=_as_float(config.get("Siren", "MaxMotionInterval", default=60), 60.0),
+            min_events=int(
+                _as_float(config.get("Siren", "MinMotionEvents", default=1), 1)
+            ),
+            min_sources=int(
+                _as_float(config.get("Siren", "MinMotionSources", default=1), 1)
+            ),
+            min_interval=_as_float(
+                config.get("Siren", "MinMotionInterval", default=10), 10.0
+            ),
+            max_interval=_as_float(
+                config.get("Siren", "MaxMotionInterval", default=60), 60.0
+            ),
         )
+
+    # ── Motion-events gating (MotionEventsControl + saved-state.json) ─────────
+
+    def _apply_motion_mode(self, raw_mode: object) -> None:
+        """Resolve ``General.MotionEventsControl`` and reconcile the runtime motion flag.
+
+        Handles the transitions described in the design doc:
+
+        * A fixed ``Enabled``/``Disabled`` mode clears the runtime flag and deletes any
+          ``saved-state.json`` (config is authoritative — no stale state may survive).
+        * Entering ``APIControl`` (at construction, or from a fixed mode on reload) restores
+          the runtime flag from ``saved-state.json`` if present, otherwise defaults to
+          ``False`` (motion disabled until an ``EnableMotion`` request arrives).
+        * Remaining in ``APIControl`` across an unrelated reload leaves the runtime flag
+          untouched, so an API-set state is not clobbered by an unrelated config edit.
+
+        Args:
+            raw_mode: The raw ``General.MotionEventsControl`` value (or ``None`` if absent).
+        """
+        previous_mode = self._motion_mode
+        new_mode = self._parse_motion_mode(raw_mode)
+
+        if new_mode is not MotionEventsControl.API_CONTROL:
+            self._motion_api_enabled = False
+            self._delete_saved_state()
+        elif previous_mode is not MotionEventsControl.API_CONTROL:
+            # Entering APIControl (first load or from a fixed mode): restore persisted state.
+            self._motion_api_enabled = self._read_saved_state()
+        # else: already in APIControl — preserve the current runtime flag untouched.
+
+        self._motion_mode = new_mode
+
+    def _parse_motion_mode(self, raw_mode: object) -> MotionEventsControl:
+        """Parse a raw config value into a :class:`MotionEventsControl` (default ``Enabled``).
+
+        Args:
+            raw_mode: The raw ``General.MotionEventsControl`` value (or ``None`` if absent).
+
+        Returns:
+            The parsed mode; ``Enabled`` when the value is missing, null, or unrecognised
+            (an unrecognised value is logged as a warning). Schema validation normally
+            rejects bad values, but this stays defensive for the injected-config test doubles.
+        """
+        if raw_mode is None:
+            return MotionEventsControl.ENABLED
+        try:
+            return MotionEventsControl(str(raw_mode))
+        except ValueError:
+            self.logger.log_message(
+                f"Unrecognised General.MotionEventsControl '{raw_mode}' — defaulting to Enabled.",
+                "warning",
+            )
+            return MotionEventsControl.ENABLED
+
+    def _motion_currently_enabled(self) -> bool:
+        """Return whether an incoming ``Motion`` event should be processed right now."""
+        if self._motion_mode is MotionEventsControl.DISABLED:
+            return False
+        if self._motion_mode is MotionEventsControl.ENABLED:
+            return True
+        return self._motion_api_enabled  # APIControl
+
+    def _read_saved_state(self) -> bool:
+        """Read the persisted motion flag from ``saved-state.json``.
+
+        Returns:
+            The saved flag, or ``False`` when the file is absent, unreadable, or malformed
+            (a read failure is logged as a warning and treated as motion disabled).
+        """
+        try:
+            data = JSONEncoder.read_from_file(self._state_path)
+        except RuntimeError as exc:
+            self.logger.log_message(
+                f"Could not read saved-state file '{self._state_path}': {exc} — "
+                "assuming motion disabled.",
+                "warning",
+            )
+            return False
+        if isinstance(data, dict):
+            return bool(data.get(SAVED_STATE_KEY, False))
+        return False
+
+    def _write_saved_state(self) -> None:
+        """Persist the current motion flag to ``saved-state.json`` (best effort).
+
+        A write failure is logged as a warning and never propagates — a persistence problem
+        must not take down the controller thread.
+        """
+        payload = {
+            SAVED_STATE_KEY: self._motion_api_enabled,
+            "saved_at": dt.datetime.now(dt.UTC),
+        }
+        try:
+            JSONEncoder.save_to_file(payload, self._state_path)
+        except RuntimeError as exc:
+            self.logger.log_message(
+                f"Could not write saved-state file '{self._state_path}': {exc}.",
+                "warning",
+            )
+
+    def _delete_saved_state(self) -> None:
+        """Remove ``saved-state.json`` if present (best effort)."""
+        try:
+            self._state_path.unlink(missing_ok=True)
+        except OSError as exc:
+            self.logger.log_message(
+                f"Could not delete saved-state file '{self._state_path}': {exc}.",
+                "warning",
+            )
+
+    def _log_motion_mode_startup(self) -> None:
+        """Log the configured motion mode (and its current effect) at startup."""
+        if self._motion_mode is MotionEventsControl.DISABLED:
+            self.logger.log_message(
+                "General.MotionEventsControl is Disabled — motion events will be logged but "
+                "ignored; manual StartSiren/StopSiren/ResetSiren remain active.",
+                "summary",
+            )
+        elif self._motion_mode is MotionEventsControl.API_CONTROL:
+            current = "enabled" if self._motion_api_enabled else "disabled"
+            self.logger.log_message(
+                "General.MotionEventsControl is APIControl — motion is currently "
+                f"{current}; use the EnableMotion/DisableMotion endpoints to change it.",
+                "summary",
+            )
 
     # ── Startup validation ───────────────────────────────────────────────────
 
@@ -136,7 +303,8 @@ class SirenController:
         """
         if not self.switch:
             self.logger.log_fatal_error(
-                "Siren.Switch is not configured — cannot control the siren.", exit_app=False
+                "Siren.Switch is not configured — cannot control the siren.",
+                exit_app=False,
             )
             return False
 
@@ -148,7 +316,9 @@ class SirenController:
             self.logger.log_fatal_error(msg, exit_app=False)
             return False
 
-        self.logger.log_message(f"Siren switch validated: output '{self.switch}'.", "detailed")
+        self.logger.log_message(
+            f"Siren switch validated: output '{self.switch}'.", "detailed"
+        )
         return True
 
     def _switch_is_valid(self) -> bool:
@@ -164,7 +334,9 @@ class SirenController:
         Args:
             stop_event: Event signalling the controller to stop.
         """
-        self.logger.log_message("Siren controller starting main control loop.", "detailed")
+        self.logger.log_message(
+            "Siren controller starting main control loop.", "detailed"
+        )
 
         if not self.validate_runtime():
             stop_event.set()
@@ -176,15 +348,11 @@ class SirenController:
 
         if not self.enabled:
             self.logger.log_message(
-                "Siren.Enable is false — running but the siren will not be sounded.", "summary"
-            )
-
-        if self.disable_motion_events:
-            self.logger.log_message(
-                "General.DisableMotionEvents is true — motion events will be logged but ignored; "
-                "manual StartSiren/StopSiren/ResetSiren remain active.",
+                "Siren.Enable is false — running but the siren will not be sounded.",
                 "summary",
             )
+
+        self._log_motion_mode_startup()
 
         while not stop_event.is_set():
             self.wake_event.clear()
@@ -218,7 +386,9 @@ class SirenController:
         if timestamp is None:
             return
         self.config_last_check = timestamp
-        self.logger.log_message("Configuration file changed on disk — reloading settings.", "summary")
+        self.logger.log_message(
+            "Configuration file changed on disk — reloading settings.", "summary"
+        )
 
         previous_switch = self.switch
         self._load_settings()
@@ -232,7 +402,9 @@ class SirenController:
 
     def _shutdown(self) -> None:
         """Turn the siren off on shutdown."""
-        self.logger.log_message("Siren controller stopping — turning siren off.", "detailed")
+        self.logger.log_message(
+            "Siren controller stopping — turning siren off.", "detailed"
+        )
         self._command_switch(on=False)
         # If the siren was sounding, send the matching stopped alert so an activation is
         # never left un-closed.
@@ -262,11 +434,18 @@ class SirenController:
                 f"ResetSiren requested via '{event.endpoint_name}'.", "summary"
             )
             self._reset_siren(now, reason="ResetSiren endpoint")
+        elif event.action in {
+            EndpointAction.ENABLE_MOTION,
+            EndpointAction.DISABLE_MOTION,
+        }:
+            self._handle_motion_control(
+                event, enable=event.action == EndpointAction.ENABLE_MOTION
+            )
         elif event.action == EndpointAction.MOTION:
-            if self.disable_motion_events:
+            if not self._motion_currently_enabled():
                 self.logger.log_message(
-                    f"Motion from '{event.endpoint_name}' ignored — "
-                    "General.DisableMotionEvents is true.",
+                    f"Motion from '{event.endpoint_name}' ignored — motion events are "
+                    f"disabled (MotionEventsControl={self._motion_mode}).",
                     "debug",
                 )
                 return
@@ -275,6 +454,34 @@ class SirenController:
             self.logger.log_message(
                 f"Ignoring event from '{event.endpoint_name}' (action=Ignore).", "debug"
             )
+
+    def _handle_motion_control(self, event: ServiceEvent, *, enable: bool) -> None:
+        """Handle an ``EnableMotion``/``DisableMotion`` request.
+
+        In ``APIControl`` mode this sets the runtime motion flag and persists it to
+        ``saved-state.json`` so the decision survives a restart. In the fixed
+        ``Enabled``/``Disabled`` modes the request is logged and ignored — config is
+        authoritative and the API toggles have no effect.
+
+        Args:
+            event: The originating ServiceAPI event (for its endpoint name).
+            enable: ``True`` for ``EnableMotion``, ``False`` for ``DisableMotion``.
+        """
+        action = "EnableMotion" if enable else "DisableMotion"
+        if self._motion_mode is not MotionEventsControl.API_CONTROL:
+            self.logger.log_message(
+                f"{action} from '{event.endpoint_name}' ignored — "
+                f"MotionEventsControl is {self._motion_mode}, not APIControl.",
+                "warning",
+            )
+            return
+        self._motion_api_enabled = enable
+        self._write_saved_state()
+        self.logger.log_message(
+            f"{action} from '{event.endpoint_name}' — motion events now "
+            f"{'enabled' if enable else 'disabled'}.",
+            "summary",
+        )
 
     def _handle_motion(self, event: ServiceEvent, now: float) -> None:
         """Handle a ``Motion`` event according to the current state.
@@ -285,7 +492,8 @@ class SirenController:
         """
         if self.state == SirenState.COOLDOWN:
             self.logger.log_message(
-                f"Motion from '{event.endpoint_name}' ignored — siren in cooldown.", "debug"
+                f"Motion from '{event.endpoint_name}' ignored — siren in cooldown.",
+                "debug",
             )
             return
 
@@ -345,7 +553,8 @@ class SirenController:
         self._cooldown_until = now + self.post_trigger_sleep
         self.tracker.reset()
         self.logger.log_message(
-            f"Siren STOPPED ({reason}); cooldown for {self.post_trigger_sleep:g}s.", "summary"
+            f"Siren STOPPED ({reason}); cooldown for {self.post_trigger_sleep:g}s.",
+            "summary",
         )
         self._notify_siren_stopped(reason)
 
@@ -357,7 +566,9 @@ class SirenController:
             self.state = SirenState.IDLE
             self._cooldown_until = None
             self.tracker.reset()
-            self.logger.log_message(f"Siren reset ({reason}) — cooldown cleared.", "summary")
+            self.logger.log_message(
+                f"Siren reset ({reason}) — cooldown cleared.", "summary"
+            )
 
     def _evaluate_timers(self, now: float) -> None:
         """Advance time-based state transitions (duration expiry, cooldown end).
@@ -381,7 +592,9 @@ class SirenController:
             self.state = SirenState.IDLE
             self._cooldown_until = None
             self.tracker.reset()
-            self.logger.log_message("Cooldown ended — ready to trigger again.", "detailed")
+            self.logger.log_message(
+                "Cooldown ended — ready to trigger again.", "detailed"
+            )
 
     # ── Smart-switch command ─────────────────────────────────────────────────
 

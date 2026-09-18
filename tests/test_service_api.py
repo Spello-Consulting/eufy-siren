@@ -61,6 +61,8 @@ ENDPOINTS = [
     {"Name": "Camera 4", "Path": "/motion/camera4", "Action": "Ignore"},
     {"Name": "Start Siren", "Path": "/siren/start", "Action": "StartSiren"},
     {"Name": "Stop Siren", "Path": "/siren/stop", "Action": "StopSiren"},
+    {"Name": "Enable Motion", "Path": "/motion/enable", "Action": "EnableMotion"},
+    {"Name": "Disable Motion", "Path": "/motion/disable", "Action": "DisableMotion"},
 ]
 
 
@@ -69,7 +71,11 @@ ENDPOINTS = [
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("/motion/camera1", "/motion/camera1"), ("/motion/camera1/", "/motion/camera1"), ("/", "/")],
+    [
+        ("/motion/camera1", "/motion/camera1"),
+        ("/motion/camera1/", "/motion/camera1"),
+        ("/", "/"),
+    ],
 )
 def test_normalise_path(raw: str, expected: str) -> None:
     """Trailing slashes are stripped, root stays '/'."""
@@ -78,9 +84,13 @@ def test_normalise_path(raw: str, expected: str) -> None:
 
 def test_build_routes_maps_paths_to_actions() -> None:
     """Routes map normalised paths to (name, action)."""
-    routes = build_routes(FakeConfig({"ServiceAPI": {"Endpoints": ENDPOINTS}}), FakeLogger())  # type: ignore[arg-type]
+    routes = build_routes(
+        FakeConfig({"ServiceAPI": {"Endpoints": ENDPOINTS}}), FakeLogger()
+    )  # type: ignore[arg-type]
     assert routes["/motion/camera1"] == ("Camera 1", EndpointAction.MOTION)
     assert routes["/siren/start"][1] == EndpointAction.START_SIREN
+    assert routes["/motion/enable"] == ("Enable Motion", EndpointAction.ENABLE_MOTION)
+    assert routes["/motion/disable"][1] == EndpointAction.DISABLE_MOTION
 
 
 def test_build_routes_rejects_unknown_action() -> None:
@@ -162,9 +172,14 @@ def running_server() -> Iterator[RunningServer]:
     wake_event = threading.Event()
     inbox = ServiceEventInbox(wake_event)
     stop_event = threading.Event()
-    config = FakeConfig(
-        {"ServiceAPI": {"Enable": True, "HostingIP": "127.0.0.1", "Port": port, "Endpoints": ENDPOINTS}}
-    )
+    config = FakeConfig({
+        "ServiceAPI": {
+            "Enable": True,
+            "HostingIP": "127.0.0.1",
+            "Port": port,
+            "Endpoints": ENDPOINTS,
+        }
+    })
     logger = FakeLogger()
 
     thread = threading.Thread(
@@ -232,9 +247,14 @@ def keyed_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[RunningServer]:
     wake_event = threading.Event()
     inbox = ServiceEventInbox(wake_event)
     stop_event = threading.Event()
-    config = FakeConfig(
-        {"ServiceAPI": {"Enable": True, "HostingIP": "127.0.0.1", "Port": port, "Endpoints": ENDPOINTS}}
-    )
+    config = FakeConfig({
+        "ServiceAPI": {
+            "Enable": True,
+            "HostingIP": "127.0.0.1",
+            "Port": port,
+            "Endpoints": ENDPOINTS,
+        }
+    })
     logger = FakeLogger()
     thread = threading.Thread(
         target=serve_api_blocking, args=(inbox, config, logger, stop_event), daemon=True
@@ -257,7 +277,9 @@ def test_access_key_required_when_set(keyed_server: RunningServer) -> None:
     assert keyed_server.get("/motion/camera1?key=secret") == 200
     assert len(keyed_server.inbox.drain()) == 1
 
-    assert keyed_server.get("/motion/camera1", headers={"X-Access-Key": "secret"}) == 200
+    assert (
+        keyed_server.get("/motion/camera1", headers={"X-Access-Key": "secret"}) == 200
+    )
     assert len(keyed_server.inbox.drain()) == 1
 
     assert keyed_server.get("/motion/camera1?key=wrong") == 403

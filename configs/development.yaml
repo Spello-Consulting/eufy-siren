@@ -3,7 +3,10 @@
 General:
   AppName: eufy-siren
   PollingInterval: 10
-  DisableMotionEvents: False
+  # Disabled | Enabled | APIControl (default when null/missing: Enabled).
+  # APIControl gates motion on the EnableMotion/DisableMotion endpoints below and
+  # persists that state to saved-state.json across restarts.
+  MotionEventsControl: Enabled
 
 Files:
   LogfileName: logs/logfile.log
@@ -62,6 +65,12 @@ ServiceAPI:
     - Name: "Reset Siren"
       Path: "/siren/reset"
       Action: "ResetSiren"
+    - Name: "Enable Motion"
+      Path: "/motion/enable"
+      Action: "EnableMotion"
+    - Name: "Disable Motion"
+      Path: "/motion/disable"
+      Action: "DisableMotion"
 
 
 Siren:

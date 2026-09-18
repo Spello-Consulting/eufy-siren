@@ -18,7 +18,8 @@ wheels/
 .env
 .cache_ggshield
 
-# App 
+# App
 logs/
+saved-state.json
 .env.target
 tests/.env.test
