@@ -19,6 +19,9 @@ all = [
     "pytest-mock>=3.15.1",
 ]
 
+[tool.pyutil]
+managed_scripts = ["launch.sh"]
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 include-package-data = true
