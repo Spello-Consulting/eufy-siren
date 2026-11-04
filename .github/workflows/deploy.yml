@@ -9,11 +9,14 @@ on:
         type: choice
         options:
           - pi-spello
+          - spelloapp
+          - all
+          
 
 jobs:
   deploy-pi-spello:
     name: Deploy → pi-spello
-    if: ${{ inputs.environment == 'pi-spello' || inputs.environment == 'both' }}
+    if: ${{ inputs.environment == 'pi-spello' || inputs.environment == 'all' }}
     runs-on: [self-hosted, pi-spello]
     environment: pi-spello
     steps:
@@ -32,3 +35,25 @@ jobs:
         run: |
           sleep 6
           sudo --chdir=/home/pi/scripts/eufy-siren /home/pi/scripts/pyutil/servicectrl.sh is-active
+
+  deploy-spelloapp:
+    name: Deploy → spelloapp
+    if: ${{ inputs.environment == 'spelloapp' || inputs.environment == 'all' }}
+    runs-on: [self-hosted, spelloapp]
+    environment: spelloapp
+    steps:
+      - name: Stop the service
+        run: |
+          sudo --chdir=/home/nick/scripts/eufy-siren /home/nick/scripts/pyutil/servicectrl.sh stop
+
+      - name: Pull latest from GitHub
+        run: |
+          sudo --chdir=/home/nick/scripts/eufy-siren /home/nick/scripts/pyutil/gitrefresh.sh --yes
+
+      - name: Deploy and start the service
+        run: sudo --chdir=/home/nick/scripts/eufy-siren /home/nick/scripts/pyutil/servicectrl.sh deploy spelloapp
+
+      # - name: Verify service is running
+      #   run: |
+      #     sleep 6
+      #     sudo --chdir=/home/nick/scripts/eufy-siren /home/nick/scripts/pyutil/servicectrl.sh is-active
